@@ -83,6 +83,31 @@ class WhisperFeatureExtractor(SequenceFeatureExtractor):
         self.sampling_rate = sampling_rate
         self.mel_filters = self.get_mel_filters(sampling_rate, n_fft, n_mels=feature_size)
 
+    # copied from w2v2
+    @staticmethod
+    def zero_mean_unit_var_norm(
+        input_values: List[np.ndarray], attention_mask: List[np.ndarray], padding_value: float = 0.0
+    ) -> List[np.ndarray]:
+        """
+        Every array in the list is normalized to have zero mean and unit variance
+        """
+        if attention_mask is not None:
+            attention_mask = np.array(attention_mask, np.int32)
+            normed_input_values = []
+
+            for vector, length in zip(input_values, attention_mask.sum(-1)):
+                normed_slice = (vector - vector[:length].mean()) / np.sqrt(vector[:length].var() + 1e-7)
+                if length < normed_slice.shape[0]:
+                    normed_slice[length:] = padding_value
+
+                normed_input_values.append(normed_slice)
+        else:
+            normed_input_values = [(x - x.mean()) / np.sqrt(x.var() + 1e-7) for x in input_values]
+
+        normed_input_values = np.stack(normed_input_values, axis=0)
+
+        return normed_input_values
+
     def get_mel_filters(self, sr, n_fft, n_mels=128, dtype=np.float32):
         # Initialize the weights
         n_mels = int(n_mels)
@@ -249,7 +274,7 @@ class WhisperFeatureExtractor(SequenceFeatureExtractor):
 
                 <Tip>
 
-                For WhisperTransoformer models, `attention_mask` should alwys be passed for batched inference, to avoid
+                For WhisperTransoformer models, `attention_mask` should always be passed for batched inference, to avoid
                 subtle bugs.
 
                 </Tip>
@@ -307,7 +332,15 @@ class WhisperFeatureExtractor(SequenceFeatureExtractor):
             max_length=max_length if max_length else self.n_samples,
             truncation=truncation,
             pad_to_multiple_of=pad_to_multiple_of,
+            return_attention_mask=True,
         )
+
+        do_normalize = True
+        if do_normalize:
+            padded_inputs["input_features"] = self.zero_mean_unit_var_norm(
+                padded_inputs["input_features"], attention_mask=padded_inputs["attention_mask"], padding_value=self.padding_value
+            )
+
         # make sure list is in array format
         input_features = padded_inputs.get("input_features").transpose(2, 0, 1)
 
