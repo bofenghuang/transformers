@@ -47,6 +47,7 @@ from transformers import (
     TrainingArguments,
     is_torch_tpu_available,
     set_seed,
+    EarlyStoppingCallback,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
@@ -625,6 +626,9 @@ def main():
         if training_args.do_eval and not is_torch_tpu_available()
         else None,
     )
+
+    # bh:
+    # trainer.add_callback(EarlyStoppingCallback(early_stopping_patience=2))
 
     # Training
     if training_args.do_train:
