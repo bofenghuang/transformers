@@ -167,3 +167,9 @@ tags
 
 # ruff
 .ruff_cache
+
+# bh:
+wandb/
+data/
+outputs/
+tmp*
