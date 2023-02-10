@@ -1678,6 +1678,7 @@ class GenerationMixin:
                 UserWarning,
             )
 
+        # bh: registry into logits_processor
         # 8. prepare distribution pre_processing samplers
         logits_processor = self._get_logits_processor(
             generation_config=generation_config,
@@ -3202,6 +3203,7 @@ class GenerationMixin:
             )  # (batch_size * num_beams, vocab_size)
 
             next_token_scores_processed = logits_processor(input_ids, next_token_scores)
+            # bh: accumulate next token scores for beam
             next_token_scores = next_token_scores_processed + beam_scores[:, None].expand_as(
                 next_token_scores_processed
             )
