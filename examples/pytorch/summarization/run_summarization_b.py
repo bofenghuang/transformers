@@ -117,6 +117,7 @@ class ModelArguments:
             )
         },
     )
+    use_cache: bool = field(default=True, metadata={})
 
 
 @dataclass
@@ -407,6 +408,12 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
+    )
+    # bh: override default config
+    config.update(
+        {
+            "use_cache": model_args.use_cache,
+        }
     )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
