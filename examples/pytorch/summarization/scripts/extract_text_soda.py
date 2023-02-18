@@ -8,9 +8,15 @@ from datasets import load_dataset
 from nltk import tokenize
 from tqdm import tqdm
 
+# import nltk
+# nltk.download('punkt')
 
 # or use simple regexes (.!?)
 def split_sentences(s):
+
+    # norm
+    s = " ".join(s.split())
+
     return tokenize.sent_tokenize(s)
 
 
@@ -20,8 +26,7 @@ dataset = dataset.remove_columns(set(dataset["train"].features.keys()) - set(["d
 
 print(dataset)
 print(dataset["train"][0])
-
-# print(dataset["validation"][48469])
+# print(dataset["train"][70467])
 # quit()
 
 # for split in ["train", "validation", "test"]:

@@ -58,19 +58,7 @@ for split in ["train", "test"]:
     df = pd.read_csv(csv_path, sep="\t")
     # NB
     df["sentence"] = df["sentence"].fillna("")
-
     print(df.shape)
-    print(df.head())
-    tmp_df = df[df["idx"] == " "]
-    print(tmp_df)
-    print(tmp_df.iloc[0])
-    print(tmp_df["idx"].max())
-    quit()
-
-    print(df.shape)
-    df.dropna(subset=["idx"], inplace=True)
-    print(df.shape)
-
     print(df.head())
     ds = Dataset.from_pandas(df)
     print(ds)
