@@ -74,8 +74,8 @@ class FrenchNumberNormalizer:
         self.converter = converter
 
     def preprocess(self, s: str):
-        s = re.sub(r"(?<=\d)[\s\,]+(?=\d{3})", "", s)  # remove space within number (12 200 000)
-        # replace "h" in time
+        s = re.sub(r"(?<=\d)[\s\,]+(?=\d{3})", "", s)  # remove space/comma before 3 digits (12 200 000)
+        # todo: replace "h" in time
         s = re.sub(r"(\d)\s*h\s*(00)", r"\1 heures", s)
         s = re.sub(r"(\d)\s*h\s*(\d)", r"\1 heures \2", s)
         return s
