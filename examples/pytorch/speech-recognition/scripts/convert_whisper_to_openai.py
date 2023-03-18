@@ -1,3 +1,14 @@
+#!/usr/bin/env python
+# Copyright 2022  Bofeng Huang
+# coding=utf-8
+
+"""
+Usage:
+./scripts/convert_whisper_to_openai.py \
+    --hf_model_name_or_path outputs/general/whisper-large-v2-ft-french-lr4e6-bs256-augment \
+    --whisper_state_path outputs/general/whisper-large-v2-ft-french-lr4e6-bs256-augment/checkpoint_openai.pt
+"""
+
 from copy import deepcopy
 import torch
 from transformers import WhisperForConditionalGeneration

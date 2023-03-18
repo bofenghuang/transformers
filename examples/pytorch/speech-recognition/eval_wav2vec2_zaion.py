@@ -154,6 +154,8 @@ def main(args):
 
     # Debug: only process the first two examples as a test
     # dataset = dataset.select(range(10))
+    # print(dataset[0])
+    # quit()
 
     # NB: when got some real word "nan" in csv file (dekuple)
     def correct_text(example):
@@ -162,7 +164,7 @@ def main(args):
         )
         return example
 
-    dataset = dataset.map(correct_text, num_proc=args.preprocessing_num_workers, desc="Correct readed text")
+    # dataset = dataset.map(correct_text, num_proc=args.preprocessing_num_workers, desc="Correct readed text")
     # dataset = dataset.sort(args.length_column_name)
     # print(dataset["wrd"][:100])
     # print(None in dataset["wrd"])
@@ -173,8 +175,8 @@ def main(args):
         sr = 8_000
 
         def read_segments(example):
-            start = int(example[args.start_column_name] * sr)
-            end = int(example[args.end_column_name] * sr)
+            start = int(float(example[args.start_column_name]) * sr)
+            end = int(float(example[args.end_column_name]) * sr)
             num_frames = end - start
 
             waveform, sample_rate = torchaudio.load(example[args.audio_column_name], frame_offset=start, num_frames=num_frames)

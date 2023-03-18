@@ -205,6 +205,7 @@ def main(args):
         # dataset = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_test/dump_readed")
 
         # bh: whisper doesn't take segments longer than 30s
+        # todo: max 448 tokens
         max_input_length = 30 * 16_000
         min_input_length = 1 * 16_000
 
