@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2021  Bofeng Huang
+# Copyright 2022  Bofeng Huang
 
 import logging
 import warnings
@@ -7,7 +7,7 @@ import warnings
 import gradio as gr
 from transformers.utils.logging import disable_progress_bar
 
-from predict_ner_punc_multiple_choice import AggregationStrategy, TokenClassificationPredictor
+from predict_ner_case_punkt import AggregationStrategy, TokenClassificationPredictor
 
 # warnings.filterwarnings("ignore")
 

@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# Copyright 2022  Bofeng Huang
+
 from dataclasses import dataclass
 from transformers import DataCollatorForTokenClassification
 
