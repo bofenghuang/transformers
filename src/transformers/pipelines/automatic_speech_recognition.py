@@ -546,6 +546,16 @@ class AutomaticSpeechRecognitionPipeline(ChunkPipeline):
                 offsets = []
                 for word, (start_offset, end_offset) in chunk_offset:
                     offsets.append({"word": word, "start_offset": start_offset, "end_offset": end_offset})
+
+            # bh: return nbest
+            # return_nbest = True
+            # if return_nbest:
+            #     # nbest = [{"text": beam[0], "lm_score": beam[-1]} for beam in beams]
+            #     nbest = [{"text": beam[0], "confidence_score": beam[-1]} for beam in beams]
+            #     # 5 best
+            #     nbest = nbest[:5]
+            #     optional["nbest"] = nbest
+
         elif self.type != "seq2seq_whisper":
             skip_special_tokens = self.type != "ctc"
             text = self.tokenizer.decode(items, skip_special_tokens=skip_special_tokens)
