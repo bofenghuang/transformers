@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
 # coding=utf-8
-# Copyright 2022 Bofeng Huang
+# Copyright 2022  Bofeng Huang
 
 from typing import List, Optional, Tuple, Union
 from dataclasses import dataclass

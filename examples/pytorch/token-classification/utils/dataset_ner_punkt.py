@@ -1,11 +1,9 @@
 #! /usr/bin/env python3
 # coding=utf-8
-# Copyright 2022 Bofeng Huang
+# Copyright 2022  Bofeng Huang
 
 import os
-import re
 from pathlib import Path
-from typing import Dict, Optional, List, Union
 
 import pandas as pd
 from datasets import Dataset
@@ -46,21 +44,21 @@ def align_sequence_label(word_ids, sequence_label, label_to_id, label_strategy="
 
 
 def tokenize_and_align_examples(
-    examples, tokenizer, label_names, label_to_id_mappings, label_strategies, text_column_name="word", stride=100
+    examples, tokenizer, label_to_id, text_column_name="word", label_column_name="label", stride=100, label_strategy="all"
 ):
 
     tokenized_inputs = tokenizer(
         examples[text_column_name], is_split_into_words=True, truncation=True, return_overflowing_tokens=True, stride=stride
     )
 
-    new_labels = {label_name: [] for label_name in label_names}
+    new_labels = []
     for example_id in range(len(tokenized_inputs["input_ids"])):
         sequence_id = tokenized_inputs["overflow_to_sample_mapping"][example_id]
+        sequence_label = examples[label_column_name][sequence_id]
+
         word_ids = tokenized_inputs.word_ids(batch_index=example_id)
 
-        for label_name in label_names:
-            sequence_label = examples[f"{label_name}_label"][sequence_id]
-            new_labels[label_name].append(align_sequence_label(word_ids, sequence_label, label_to_id_mappings[label_name], label_strategy=label_strategies[label_name]))
+        new_labels.append(align_sequence_label(word_ids, sequence_label, label_to_id, label_strategy=label_strategy))
 
         # todo: align case label
 
@@ -69,34 +67,18 @@ def tokenize_and_align_examples(
         #     print(f"{t:10}  {w_i}  {l}")
         # quit()
 
-    for label_name in label_names:
-        # tokenized_inputs[re.sub(r"_label$", "_labels", label_name)] = new_labels[label_name]
-        tokenized_inputs[f"{label_name}_labels"] = new_labels[label_name]
-
+    tokenized_inputs["labels"] = new_labels
     del tokenized_inputs["overflow_to_sample_mapping"]
 
     return tokenized_inputs
 
 
-def load_data_files(
-    data_dir,
-    task_config: Union[List[str], str],
-    replacers: Optional[Dict] = None,
-    preprocessing_num_workers: Optional[int] = None,
-    overwrite_cache: bool = False,
-):
+def load_data_files(data_dir, task_config, replacers=None, preprocessing_num_workers=None, overwrite_cache=False):
     task_configs = ["case", "eos", "punc"]
 
-    if isinstance(task_config, str):
-        task_config = [task_config]
-
-    if any(task_config_ not in task_configs for task_config_ in task_config):
+    if task_config not in task_configs:
         raise ValueError("Invalid task name")
-    if replacers is not None and any(task_config_ not in task_configs for task_config_ in replacers.keys()):
-        raise ValueError("Invalid replacers")
-
-    task_column_indices = [task_configs.index(task_config_) + 1 for task_config_ in task_config]
-    label_names = [f"{task_config_}_label" for task_config_ in task_config]
+    task_id = task_configs.index(task_config)
 
     def my_gen():
         paths = Path(data_dir).rglob("*.tsv")
@@ -109,9 +91,9 @@ def load_data_files(
                 p.as_posix(),
                 sep="\t",
                 header=None,
-                usecols=[0] + task_column_indices,
-                names=["word"] + label_names,
-                dtype={"word": str, **{label_: str for label_ in label_names}},
+                usecols=[0, task_id + 1],
+                names=["word", "label"],
+                dtype={"word": str, "label": str},
             )
 
             # if replacers is not None:
@@ -122,9 +104,6 @@ def load_data_files(
 
             # print(df_["word"].tolist())
             # print(df_["label"].tolist())
-            # for label_ in label_names:
-            #     print(df_[label_].tolist())
-            #     print(df_[label_].tolist())
             # quit()
 
             # data.append({"word": df_["word"].tolist(), "label": df_["label"].tolist()})
@@ -132,11 +111,7 @@ def load_data_files(
             # label_lst.append(df_["label"].tolist())
 
             # bh: without .astype(str) can cause errors
-            # yield {"word": df_["word"].astype(str).tolist(), "label": df_["label"].astype(str).tolist()}
-            yield {
-                "word": df_["word"].astype(str).tolist(),
-                **{label_: df_[label_].astype(str).tolist() for label_ in label_names},
-            }
+            yield {"word": df_["word"].astype(str).tolist(), "label": df_["label"].astype(str).tolist()}
 
     # ds = Dataset.from_list(data)
     # ds = Dataset.from_dict({"word": word_lst, "label": label_lst})
@@ -146,10 +121,8 @@ def load_data_files(
     if replacers is not None:
 
         def proc_(example):
-            for label_, replacers_ in replacers.items():
-                # example[f"{label_}_label"] = list(map(replacers_.get, example[f"{label_}_label"]))
-                example[f"{label_}_label"] = [replacers_.get(l, l) for l in example[f"{label_}_label"]]
-
+            # example["label"] = list(map(replacers.get, example["label"]))
+            example["label"] = [replacers.get(l, l) for l in example["label"]]
             return example
 
         ds = ds.map(

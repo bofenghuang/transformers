@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2021  Bofeng Huang
+# Copyright 2022  Bofeng Huang
 
 from time import perf_counter
 
@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-from predict_ner_punct_multiple_choice import TokenClassificationPredictor
+from predict_ner_case_punkt import TokenClassificationPredictor
 
 
 # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc-multilingual_plus/xlm-roberta-large_ft"

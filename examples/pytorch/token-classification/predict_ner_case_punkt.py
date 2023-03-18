@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2021  Bofeng Huang
+# Copyright 2022  Bofeng Huang
 
 import os
 import re
@@ -14,6 +14,9 @@ import torch
 from tqdm import tqdm
 
 from transformers import AutoConfig, AutoModelForTokenClassification, AutoTokenizer, BatchEncoding
+
+from utils.model_ner_case_punkt import RobertaForRecasePunct
+from utils.normalize_text import TextNormalizer
 
 
 class ExplicitEnum(str, Enum):
@@ -37,47 +40,67 @@ class AggregationStrategy(ExplicitEnum):
     MAX = "max"
 
 
-def remove_symbols_and_diacritics(s: str, keep=""):
-    r"""Replace any other markers, symbols, and punctuations with a space,
-    and drop any diacritics (category 'Mn' and some manual mappings)
-    """
+def remove_symbols(s: str, keep=""):
+    r"""Replace any other markers, symbols, punctuations with a space, keeping diacritics."""
     return "".join(
-        c if c in keep else "" if unicodedata.category(c) == "Mn" else " " if unicodedata.category(c)[0] in "MSP" else c
-        for c in unicodedata.normalize("NFKD", s)
+        c if c in keep else " " if unicodedata.category(c)[0] in "MSP" else c for c in unicodedata.normalize("NFKC", s)
     )
 
 
 class TokenClassificationPredictor:
 
-    punc_label2text = {"0": "", "COMMA": ",", "PERIOD": ".", "QUESTION": "?"}
+    threshold_case_capitalization = 0.6
+    case_label2text_functions = {
+        "CAPITALIZE": lambda x, score: x.lower().capitalize()
+        if score > TokenClassificationPredictor.threshold_case_capitalization
+        else x.lower(),
+        "LOWER": lambda x, _: x.lower(),
+        "UPPER": lambda x, _: x.upper(),
+    }
+    # punc_label2text = {"0": "", "COMMA": ",", "PERIOD": ".", "QUESTION": "?"}
+    # todo: add threshold
+    threshold_punctuation = -1
+    punct_label2text_functions = {
+        "0": lambda _: "",
+        "COMMA": lambda score: "," if score > TokenClassificationPredictor.threshold_punctuation else "",
+        "PERIOD": lambda score: "." if score > TokenClassificationPredictor.threshold_punctuation else "",
+        # todo multilingual
+        "QUESTION": lambda score: " ?" if score > TokenClassificationPredictor.threshold_punctuation else "",
+    }
 
-    def __init__(self, model_name_or_path: str, device: Union[torch.device, str, int] = "cpu", **kwargs) -> None:
+    def __init__(
+        self,
+        model_name_or_path: str,
+        device: Union[torch.device, str, int] = "cpu",
+        normalizer_file: Optional[str] = None,
+        **kwargs
+    ) -> None:
         # load config
         self.config = AutoConfig.from_pretrained(model_name_or_path)
+        # todo: hf change this somewhere is from_pretrained()
+        self.config.case_id2label = {int(k): v for k, v in self.config.case_id2label.items()}
+        self.config.punc_id2label = {int(k): v for k, v in self.config.punc_id2label.items()}
         # load tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        # ! only for camembert large
-        # this model has a wrong maxlength value, so we need to set it manually
+        # NB: only for camembert large
         # if model_name_or_path == "camembert/camembert-large":
+        # this model has a wrong maxlength value, so we need to set it manually
         self.tokenizer.model_max_length = 512
         # device
         self.device = self.configure_device(device)
         # load model
         # todo: onnx
-        model = AutoModelForTokenClassification.from_pretrained(model_name_or_path)
+        # model = AutoModelForTokenClassification.from_pretrained(model_name_or_path)
+        model = RobertaForRecasePunct.from_pretrained(
+            model_name_or_path,
+            num_case_labels=len(self.config.case_id2label.keys()),
+            num_punc_labels=len(self.config.punc_id2label.keys()),
+        )
         model.eval()
         self.model = model.to(self.device)
 
-        # todo: set by config
-        # kwargs.update(
-        #     {
-        #         "max_length": 20,
-        #         "stride": 10,
-        #         "batch_size": 4,
-        #         "overlap": 10,
-        #         "aggregation_strategy": AggregationStrategy.LAST,
-        #     }
-        # )
+        # load normalization patterns
+        self.text_normalizer = TextNormalizer(normalizer_file) if normalizer_file is not None else None
 
         self._preprocess_params, self._forward_params, self._postprocess_params = self._sanitize_parameters(**kwargs)
 
@@ -87,7 +110,6 @@ class TokenClassificationPredictor:
         max_length: Optional[int] = None,
         stride: Optional[int] = None,
         batch_size: Optional[int] = None,
-        overlap: Optional[int] = None,
         aggregation_strategy: Optional[AggregationStrategy] = None,
     ):
         preprocess_params = {}
@@ -103,8 +125,9 @@ class TokenClassificationPredictor:
             forward_params["batch_size"] = batch_size
 
         postprocess_params = {}
-        if overlap is not None:
-            postprocess_params["overlap"] = overlap
+        # use the same value for stride and overlap
+        if stride is not None:
+            postprocess_params["overlap"] = stride
         if aggregation_strategy is not None:
             postprocess_params["aggregation_strategy"] = aggregation_strategy
 
@@ -137,23 +160,29 @@ class TokenClassificationPredictor:
     def __call__(self, inputs, **kwargs):
         return self.prediction_to_text(self.predict(inputs, **kwargs))
 
-    @staticmethod
-    def pre_normalize_text(s: str):
+    def pre_normalize_text(self, s: str):
         s = s.lower()  # remove existing case
 
-        # same standarization when preparing training data
+        # use the same standarization when preparing training data
         s = re.sub(r"(?<=\w)\s+'", r"'", s)  # standardize when there's a space before an apostrophe
-        s = re.sub(r"(?<!aujourd)(?<=\w)'\s*(?=\w)", "' ", s)  # add an espace after an apostrophe (except)
+        s = re.sub(r"(?<!aujourd)(?<=\w)'\s*(?=\w)", "' ", s)  # add an espace after an apostrophe (except "aujourd")
 
-        s = remove_symbols_and_diacritics(s, keep="'-")  # remove existing punc
+        s = remove_symbols(s, keep="'-")  # remove existing punct
 
         s = re.sub(r"\s+", " ", s).strip()  # replace any successive whitespace characters with a space
         return s
 
-    @staticmethod
-    def post_normalize_text(s: str):
-        s = re.sub(r"\s+'\s+", "'", s)  # standardize when there's a space before/after an apostrophe
+    def post_normalize_text(self, s: str):
+
+        if self.text_normalizer is not None:
+            s = self.text_normalizer(s)
+
+        # todo
+        s = re.sub(r"\s*'\s*", "'", s)  # standardize when there's a space before/after an apostrophe
         s = re.sub(r"\s+", " ", s).strip()  # replace any successive whitespace characters with a space
+
+        # post rules
+        s = re.sub(r"(?:(?<=^)|(?<=\.\s|\?\s))([a-zàâäéèêëîïôöùûüÿçñ])", lambda m: m.group(1).upper(), s)  # capitalize sentence if not
         return s
 
     def preprocess(
@@ -163,7 +192,7 @@ class TokenClassificationPredictor:
             inputs = [inputs]
 
         if do_pre_normalize:
-            inputs = [TokenClassificationPredictor.pre_normalize_text(inputs_) for inputs_ in inputs]
+            inputs = [self.pre_normalize_text(inputs_) for inputs_ in inputs]
 
         tokenized_inputs = self.tokenizer(
             inputs,
@@ -188,10 +217,12 @@ class TokenClassificationPredictor:
         features = model_inputs.to(self.device)
         with torch.inference_mode():
             outputs = self.model(**features)
-            logits = outputs[0]
+            # logits = outputs[0]
 
         return {
-            "logits": logits.to(torch.device("cpu")),
+            # "logits": logits.to(torch.device("cpu")),
+            "case_logits": outputs["case_logits"].to(torch.device("cpu")),
+            "punc_logits": outputs["punc_logits"].to(torch.device("cpu")),
             "special_tokens_mask": special_tokens_mask,
             "offset_mapping": offset_mapping,
             "overflow_to_sample_mapping": overflow_to_sample_mapping,
@@ -223,11 +254,6 @@ class TokenClassificationPredictor:
         model_outputs["sentence"] = sentences
         # print(model_outputs)
 
-        # debug
-        # import pickle
-        # with open("tmp.pkl", "wb") as f:
-        #     pickle.dump(model_outputs, f)
-
         return model_outputs
 
     def postprocess(
@@ -237,25 +263,36 @@ class TokenClassificationPredictor:
         model_outputs = {k: v.numpy() if torch.is_tensor(v) else v for k, v in model_outputs.items()}
 
         # debug
-        # for input_ids_, logits_ in zip(model_outputs["input_ids"], model_outputs["logits"]):
-        #     for i, l in zip(input_ids_, logits_):
-        #         print(self.tokenizer.convert_ids_to_tokens([i]), l)
+        # for input_ids_, case_logits_, punc_logits_ in zip(model_outputs["input_ids"], model_outputs["case_logits"], model_outputs["punc_logits"]):
+        #     for i, c_l, p_l in zip(input_ids_, case_logits_, punc_logits_):
+        #         print(self.tokenizer.convert_ids_to_tokens([i]), c_l, p_l)
         #     print("\n")
         # quit()
 
         # gather splitted sub results
-        sentences, input_ids, logits, offset_mapping = self.gather_sub_results(model_outputs, overlap)
+        sentences, input_ids, case_logits, punc_logits, offset_mapping = self.gather_sub_results(model_outputs, overlap)
         # print(self.tokenizer.decode(input_ids[0]))
         # quit()
 
         entities = []
-        for sentence_, input_ids_, logits_, offset_mapping_ in zip(sentences, input_ids, logits, offset_mapping):
+        for sentence_, input_ids_, case_logits_, punc_logits_, offset_mapping_ in zip(
+            sentences, input_ids, case_logits, punc_logits, offset_mapping
+        ):
 
-            maxes = np.max(logits_, axis=-1, keepdims=True)
-            shifted_exp = np.exp(logits_ - maxes)
-            scores_ = shifted_exp / shifted_exp.sum(axis=-1, keepdims=True)
+            case_maxes = np.max(case_logits_, axis=-1, keepdims=True)
+            case_shifted_exp = np.exp(case_logits_ - case_maxes)
+            case_scores_ = case_shifted_exp / case_shifted_exp.sum(axis=-1, keepdims=True)
 
-            pre_entities_ = self.gather_pre_entities(sentence_, input_ids_, scores_, offset_mapping_)
+            punc_maxes = np.max(punc_logits_, axis=-1, keepdims=True)
+            punc_shifted_exp = np.exp(punc_logits_ - punc_maxes)
+            punct_scores_ = punc_shifted_exp / punc_shifted_exp.sum(axis=-1, keepdims=True)
+
+            # debug
+            # for input_i_, case_s_, punc_s_ in zip(input_ids_, case_scores_, punct_scores_):
+            #     print(input_i_, self.tokenizer.convert_ids_to_tokens([input_i_]), case_s_, punc_s_)
+            # quit()
+
+            pre_entities_ = self.gather_pre_entities(sentence_, input_ids_, case_scores_, punct_scores_, offset_mapping_)
             entities_ = self.aggregate_words(pre_entities_, aggregation_strategy)
 
             entities.append(entities_)
@@ -267,69 +304,82 @@ class TokenClassificationPredictor:
     def gather_sub_results(self, model_outputs, overlap: int = 0):
         sentences = []
         aggregated_input_ids = []
-        aggregated_logits = []
+        aggregated_case_logits = []
+        aggregated_punc_logits = []
         aggregated_offset_mapping = []
 
         # sorted unique
         for sentence_id in np.unique(model_outputs["overflow_to_sample_mapping"]):
             indexes_ = model_outputs["overflow_to_sample_mapping"] == sentence_id
             input_ids_sentence_splits = model_outputs["input_ids"][indexes_]
-            logits_sentence_splits = model_outputs["logits"][indexes_]
+            case_logits_sentence_splits = model_outputs["case_logits"][indexes_]
+            punc_logits_sentence_splits = model_outputs["punc_logits"][indexes_]
             offset_mapping_sentence_splits = model_outputs["offset_mapping"][indexes_]
             special_tokens_mask_sentence_splits = model_outputs["special_tokens_mask"][indexes_]
 
             overlap_ = overlap
 
             input_ids_sentence = []
-            logits_sentence = []
+            case_logits_sentence = []
+            punc_logits_sentence = []
             offset_mapping_sentence = []
-            for i, (input_ids_, logits_, offset_mapping_, special_tokens_mask_) in enumerate(
+            for i, (input_ids_, case_logits_, punc_logits_, offset_mapping_, special_tokens_mask_) in enumerate(
                 zip(
                     input_ids_sentence_splits,
-                    logits_sentence_splits,
+                    # logits_sentence_splits,
+                    case_logits_sentence_splits,
+                    punc_logits_sentence_splits,
                     offset_mapping_sentence_splits,
                     special_tokens_mask_sentence_splits,
                 )
             ):
                 # use last batch completely
-                if i == len(logits_sentence_splits) - 1:
+                # if i == len(logits_sentence_splits) - 1:
+                if i == len(case_logits_sentence_splits) - 1:
                     overlap_ = 0
 
                 non_special_indexes = special_tokens_mask_ != 1
                 # num_non_overlap = len(input_ids_) - overlap_
                 num_non_overlap = sum(non_special_indexes) - overlap_
                 input_ids_sentence.append(input_ids_[non_special_indexes][:num_non_overlap])
-                logits_sentence.append(logits_[non_special_indexes][:num_non_overlap])
+                case_logits_sentence.append(case_logits_[non_special_indexes][:num_non_overlap])
+                punc_logits_sentence.append(punc_logits_[non_special_indexes][:num_non_overlap])
                 offset_mapping_sentence.append(offset_mapping_[non_special_indexes][:num_non_overlap])
 
             # sentences.append(model_outputs["sentence"][next(i for i, v in enumerate(indexes_) if v)])
             sentences.append(model_outputs["sentence"][np.argwhere(indexes_)[0][0]])
             aggregated_input_ids.append(np.concatenate(input_ids_sentence, axis=0))
-            aggregated_logits.append(np.concatenate(logits_sentence, axis=0))
+            aggregated_case_logits.append(np.concatenate(case_logits_sentence, axis=0))
+            aggregated_punc_logits.append(np.concatenate(punc_logits_sentence, axis=0))
             aggregated_offset_mapping.append(np.concatenate(offset_mapping_sentence, axis=0))
 
         # aggregated_input_ids = np.stack(aggregated_input_ids, axis=0)
         # aggregated_logits = np.stack(aggregated_logits, axis=0)
         # aggregated_offset_mapping = np.stack(aggregated_offset_mapping, axis=0)
 
-        return sentences, aggregated_input_ids, aggregated_logits, aggregated_offset_mapping
+        return sentences, aggregated_input_ids, aggregated_case_logits, aggregated_punc_logits, aggregated_offset_mapping
 
     def gather_pre_entities(
-        self, sentence: str, input_ids: np.ndarray, scores: np.ndarray, offset_mapping: np.ndarray
+        self,
+        sentence: str,
+        input_ids: np.ndarray,
+        case_scores: np.ndarray,
+        punct_scores: np.ndarray,
+        offset_mapping: np.ndarray,
     ) -> List[dict]:
         pre_entities = []
 
         last_word = None
-        for idx, token_scores in enumerate(scores):
-            word = self.tokenizer.convert_ids_to_tokens(int(input_ids[idx]))
+        for idx, input_id in enumerate(input_ids):
+            word = self.tokenizer.convert_ids_to_tokens(int(input_id))
             # normally there won't be None here
             if offset_mapping is not None:
                 start_ind, end_ind = offset_mapping[idx]
                 word_ref = sentence[start_ind:end_ind]
                 # todo: This is a fallback heuristic. This will fail most likely on any kind of text + punctuation mixtures that will be considered "words". Non word aware models cannot do better than this unfortunately.
-                # todo: "l' ue" gives unexpected token (l'", "▁", "ue") (not "_") whose offset mapping is wrong
-                # todo: "ue" doesn't apply to HF rules, and we may need prediction of the token "▁" 
                 # is_subword = start_ind > 0 and " " not in sentence[start_ind - 1 : start_ind + 1]
+                # todo: "l' ue" gives unexpected token (l'", "▁", "ue") (not "_") whose offset mapping is wrong
+                # todo: "ue" doesn't apply to HF rules, and we may need prediction of the token "▁"
                 is_subword = start_ind > 0 and " " not in sentence[start_ind - 1 : start_ind + 1] if last_word != "▁" else True
                 # print(f"-{word}-{word_ref}-{start_ind}-{end_ind}-{sentence[start_ind - 1 : start_ind + 1]}-{is_subword}")
 
@@ -344,58 +394,73 @@ class TokenClassificationPredictor:
 
             pre_entity = {
                 "word": word,
-                "scores": token_scores,
+                "case_scores": case_scores[idx],
+                "punct_scores": punct_scores[idx],
                 "start": start_ind,
                 "end": end_ind,
                 "index": idx,
                 "is_subword": is_subword,
             }
-            # # todo: words "aujourd' hui" gives unexpected token "▁" (not "_") whose offset mapping is wrong
-            # # if int(input_ids[idx]) == 21 and offset_mapping[idx][1] - offset_mapping[idx][0] == 1:
-            # if word == "▁":
-            #     continue
             pre_entities.append(pre_entity)
 
             last_word = word
 
         # debug
+        # i = -1
         # for e in pre_entities:
-        #     print(e)
+        #     if not e["is_subword"]:
+        #         i += 1
+        #     print(i, e)
         # quit()
 
         return pre_entities
 
-    def aggregate_word(
-        self, entities: List[dict], aggregation_strategy: AggregationStrategy = AggregationStrategy.LAST
-    ) -> dict:
-        word = self.tokenizer.convert_tokens_to_string([entity["word"] for entity in entities])
+    def aggregate_prediction(
+        self, entities: List[dict], entity_score_name: str, aggregation_strategy: AggregationStrategy, id2label: dict
+    ):
         if aggregation_strategy == AggregationStrategy.FIRST:
-            scores = entities[0]["scores"]
+            scores = entities[0][entity_score_name]
             idx = scores.argmax()
             score = scores[idx]
-            entity = self.config.id2label[idx]
+            entity = id2label[idx]
         elif aggregation_strategy == AggregationStrategy.LAST:
-            scores = entities[-1]["scores"]
+            scores = entities[-1][entity_score_name]
             idx = scores.argmax()
             score = scores[idx]
-            entity = self.config.id2label[idx]
+            entity = id2label[idx]
         elif aggregation_strategy == AggregationStrategy.MAX:
-            max_entity = max(entities, key=lambda entity: entity["scores"].max())
-            scores = max_entity["scores"]
+            max_entity = max(entities, key=lambda entity: entity[entity_score_name].max())
+            scores = max_entity[entity_score_name]
             idx = scores.argmax()
             score = scores[idx]
-            entity = self.config.id2label[idx]
+            entity = id2label[idx]
         elif aggregation_strategy == AggregationStrategy.AVERAGE:
-            scores = np.stack([entity["scores"] for entity in entities])
+            scores = np.stack([entity[entity_score_name] for entity in entities])
             average_scores = np.nanmean(scores, axis=0)
             entity_idx = average_scores.argmax()
-            entity = self.config.id2label[entity_idx]
+            entity = id2label[entity_idx]
             score = average_scores[entity_idx]
         else:
             raise ValueError("Invalid aggregation_strategy")
+
+        return entity, score
+
+    def aggregate_word(self, entities: List[dict], aggregation_strategy: AggregationStrategy) -> dict:
+        word = self.tokenizer.convert_tokens_to_string([entity["word"] for entity in entities])
+
+        # todo
+        case_entity, case_score = self.aggregate_prediction(
+            entities, "case_scores", AggregationStrategy.FIRST, self.config.case_id2label
+        )
+        punct_entity, punct_score = self.aggregate_prediction(
+            entities, "punct_scores", AggregationStrategy.LAST, self.config.punc_id2label
+        )
+
         new_entity = {
-            "entity": entity,
-            "score": score,
+            "case_entity": case_entity,
+            "case_score": case_score,
+            "punct_entity": punct_entity,
+            "punct_score": punct_score,
             "word": word,
             "start": entities[0]["start"],
             "end": entities[-1]["end"],
@@ -425,120 +490,70 @@ class TokenClassificationPredictor:
         for predictions_ in predictions:
             new_sentence = ""
             for pred_word in predictions_:
-                # todo
-                pred_word_text = pred_word["word"] + TokenClassificationPredictor.punc_label2text.get(pred_word["entity"])
+                recase_funct_ = self.case_label2text_functions.get(pred_word["case_entity"])
+                repunct_funct_ = self.punct_label2text_functions.get(pred_word["punct_entity"])
+                pred_word_text = recase_funct_(pred_word["word"], pred_word["case_score"]) + repunct_funct_(
+                    pred_word["punct_score"]
+                )
                 new_sentence += pred_word_text + " "
 
+            # todo: inverse label for es
             # todo: rule based correction
             # Append trailing period if doesnt exist.
             # if new_sentence[-1].isalnum():
 
-            # new_sentence = new_sentence.strip()
-            new_sentence = TokenClassificationPredictor.post_normalize_text(new_sentence)
+            # post normalize text
+            new_sentence = self.post_normalize_text(new_sentence)
             new_sentences.append(new_sentence)
         return new_sentences
 
 
-def main(model_name_or_path):
-    import evaluate
-    import pandas as pd
-    import sys
-    from dataset_ner_punct import load_data_files
-
+def main():
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/punc/camembert-base_ft"
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/punc/camembert-large_ft"
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/punc/xlm-roberta-base_ft"
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/punc/xlm-roberta-large_ft"
-    test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/test"
+    # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc/camembert-base_ft"
+    # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc/xlm-roberta-base_ft"
+    # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc-multilingual/xlm-roberta-large_ft"
+    # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc-multilingual_plus/xlm-roberta-base_ft"
+    model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc-multilingual_plus/xlm-roberta-large_ft"
+    # test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/test"
+    # test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/tmp"
+    # test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/en_europarl/data/test"
+    # test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/es_europarl/data/test"
+    # test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/de_europarl/data/test"
     # test_data_dir = "/home/bhuang/corpus/text/internal/punctuation/2022-10-05/data"
 
     tc = TokenClassificationPredictor(
         model_name_or_path,
-        0,
-        # batch_size=64,
+        device=0,
+        normalizer_file="./normalizer.json",
+        do_pre_normalize=True,
         stride=100,
-        overlap=100,
-        aggregation_strategy=AggregationStrategy.LAST,
+        # batch_size=64,
+        # aggregation_strategy=AggregationStrategy.LAST,
     )
 
-    # csv_path = "/home/bhuang/corpus/text/internal/punctuation/2022-10-05/data.csv"
-    # to_csv_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/punc_old/camembert-base-ft/res/preds.tsv"
-    # df = pd.read_csv(csv_path, sep=";")
-    # print(df.shape)
-    # df.dropna(subset=["input", "reference"], how="any", inplace=True)
-    # print(df.shape)
-    # print(df.head())
-    # df["hypothesis"] = df["input"].map(lambda x: tc([x])[0])
-    # tmp_outdir = os.path.dirname(to_csv_path)
-    # if not os.path.exists(tmp_outdir):
-    #     os.makedirs(tmp_outdir)
-    # df.to_csv(to_csv_path, index=False, sep="\t")
-    # sys.path.append("/home/bhuang/my-scripts")
-    # from myscripts.data.text.wer.get_alignment import stats_wer
-    # # df["reference"] = df["reference"].map()
-    # df["reference"] = df["reference"].str.lower()
-    # refs = dict(zip(df["id"], [l.split() for l in df["reference"]]))
-    # hyps = dict(zip(df["id"], [l.split() for l in df["hypothesis"]]))
-    # stats_wer(refs, hyps, tmp_outdir)
-    # quit()
+    print(f"Model from {model_name_or_path} has been loaded")
 
-    # word = ["président", "de", "la", "séance", "d'", "aujourd'", "hui", "pour", "confirmer"]
-    # # word = ["président", "de", "la", "séance", "d'", "aujourd'hui", "pour", "confirmer"]
-    # sentence = " ".join(word)
-    # # sentence = "président de la séance d'aujourd'hui pour confirmer"
-    # sentence = "d'accord effectivement le véhicule il est de deux mille le vingt-cinq janvier deux mille très bien donc j'ai toutes les informations nécessaires pour la déclaration de bris de glace pour la facturation donc y aura bien sûr la franchise de soixante de soixante euros à régler le jour de l'intervention la facture et la déclaration de bris de glace sera envoyé en même temps une fois l'intervention fini pardon à l'assurance et je vous rappelle le rendez vous donc du dix-neuf janvier à neuf heures trente à mireille lauze pour le remplacement de la lunette arrière sur le sujet qui est ce que vous avez des questions monsieur"
-    # print(tc(sentence))
-    # res = tc.predict(sentence)
-    # print(tc.prediction_to_text(res)[0])
-    # hypothese = [pred_["entity"] for pred_ in res[0]]
-    # word_pred = [pred_["word"] for pred_ in res[0]]
-    # # print(res[0])
-    # for r in res[0]:
-    #     print(r)
-    # for w, w_p in zip(word, word_pred):
-    #     print(w, w_p)
-    # quit()
-
-    # don't forget replacers cc
-    # test_ds = load_data_files(test_data_dir, task_config="punc", replacers={"EXCLAMATION": "PERIOD"}, preprocessing_num_workers=16)
-    test_ds = load_data_files(test_data_dir, task_config="eos", preprocessing_num_workers=16)
-    # test_ds = load_data_files(test_data_dir, task_config="case", replacers={"OTHER": "LOWER"}, preprocessing_num_workers=16)
-
-    def predict_(examples):
-        sentences = [" ".join(words) for words in examples["word"]]
-        # examples["hypothese"] = [[pred_["entity"] for pred_ in pred] for pred in tc.predict(sentences)]
-        predictions = tc.predict(sentences)
-        examples["hypothese"] = [[pred_["entity"] for pred_ in pred] for pred in predictions]
-        examples["word_pred"] = [[pred_["word"] for pred_ in pred] for pred in predictions]
-        return examples
-
-    # test_ds = test_ds.select(range(10))
-    test_ds = test_ds.map(predict_, batched=True, batch_size=128)
-    # print(test_ds)
-    # print(test_ds[0])
-    # print(test_ds[1])
-    # quit()
-
-    # debug
-    # for w, w_p in zip(test_ds[0]["word"], test_ds[0]["word_pred"]):
-    #     print(w, w_p)
-    # quit()
-
-    # metric = evaluate.load("seqeval")
-    # results = metric.compute(predictions=test_ds["hypothese"], references=test_ds["label"])
-    # print(results)
-
-    tmp_outdir = f"{model_name_or_path}/results/predict_words"
-    if not os.path.exists(tmp_outdir):
-        os.makedirs(tmp_outdir)
-
-    with open(f"{tmp_outdir}/references.txt", "w") as writer:
-        for labels_ in test_ds["label"]:
-            writer.write(" ".join(labels_) + "\n")
-
-    with open(f"{tmp_outdir}/predictions.txt", "w") as writer:
-        for prediction_ in test_ds["hypothese"]:
-            writer.write(" ".join(prediction_) + "\n")
+    # Multiple sentences
+    sentences = [
+        # "ca va",
+        # "what's up bro",
+        # "bonjour comment ca va",
+        # "bonjour j'aimerais savoir quelle est la réponse quelle était la question déjà",
+        # "qué tal",
+        # "que es la pregunta",
+        # "what's up",
+        "ça d'accord donc après vous allez recevoir un mail de confirmation tout en bas vous retrouverez en lien bleu qui vous permettra de nous retourner la photo de la carte verte ainsi que la quatre et là pour qu'on puisse finaliser la prise en charge d'assurance d'accord parfait donc là monsieur visio le technicien se déplace donc au dix-neuf route de déduit h a rempli donc il y a pour le mardi le dix-sept janvier dans la matinée entre huit et treize heures pour une heure trente je vous envoie la confirmation et donc c'est par rapport à votre chantier également aussi de métal également vous nous contactez tout simplement pour qu'on puisse modifier l adresse pour l'intervention d'accord",
+    ]
+    for sentence in sentences:
+        # print(tc(sentence))
+        res = tc.predict(sentence)
+        print(tc.prediction_to_text(res)[0])
+        for r in res[0]:
+            print(r)
 
 
 if __name__ == "__main__":
