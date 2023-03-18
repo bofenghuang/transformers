@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# export TRANSFORMERS_CACHE=/rd_storage/<user>/.cache/huggingface/transformers/
+export TRANSFORMERS_CACHE="/projects/bhuang/.cache/huggingface/transformers"
 export HF_DATASETS_CACHE="/projects/bhuang/.cache/huggingface/datasets"
 
 # export WANDB_MODE=disabled
@@ -13,16 +13,7 @@ export WANDB_PROJECT=hf-asr-fr
 export OMP_NUM_THREADS=1
 
 # https://github.com/microsoft/DeepSpeed/issues/662
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-# export CUDA_VISIBLE_DEVICES=1,2
-
-# Corpus stat training_duration / test_duration
-# mcv: 723.62h / 26.21h
-# mtedx: 171.55h / 1.55h
-# mediaspeech: 10.00h / 
-# mls: 1086.65h / 10.07h
-# voxpopuli: 210.66h / 4.89h
-# african_accented_fr: 11.68h / 1.69h
+export CUDA_VISIBLE_DEVICES=0,3,4,5
 
 # models
 # --model_name_or_path="facebook/wav2vec2-large-xlsr-53" \
@@ -30,7 +21,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 # --model_name_or_path="facebook/wav2vec2-xls-r-1b" \
 # --model_name_or_path="LeBenchmark/wav2vec2-FR-7K-large" \
 
-# multiple gpu
+# multiple gpus - layerdropout vs gradient_checkpointing
 # --ddp_find_unused_parameters true \
 # --gradient_checkpointing \
 
@@ -48,9 +39,9 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 # deepspeed --include localhost:1,2 --master_port 29001 run_speech_recognition_ctc_b.py \
 #     --deepspeed="ds_config.json" \
 
-# torchrun \
-#     --nproc_per_node 4 run_speech_recognition_ctc_b.py \
-python run_speech_recognition_ctc_b.py \
+torchrun \
+    --nproc_per_node 4 run_speech_recognition_ctc_b.py \
+    --dataset_name="CUSTOMIZED" \
     --use_auth_token \
     --text_column_name="sentence" \
     --length_column_name="input_length" \
@@ -58,10 +49,11 @@ python run_speech_recognition_ctc_b.py \
     --max_duration_in_seconds="30" \
     --min_duration_in_seconds="1" \
     --do_speech_augment \
-    --preprocessing_num_workers="16" \
+    --preprocessing_num_workers="8" \
     --dataloader_num_workers="4" \
     --model_name_or_path="LeBenchmark/wav2vec2-FR-7K-large" \
-    --output_dir="./outputs/big/wav2vec2-FR-7K-large-ft-augment-bs256-lr1e4-tmp" \
+    --output_dir="./outputs/general/wav2vec2-FR-7K-large-ft-ep15-bs256-lr1e4" \
+    --run_name="wav2vec2-FR-7K-large-ft-ep15-bs256-lr1e4" \
     --overwrite_output_dir \
     --num_train_epochs="15" \
     --per_device_train_batch_size="16" \

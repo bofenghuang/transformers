@@ -12,6 +12,7 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
+# limitations under the License.
 
 """ Fine-tuning a 🤗 Transformers CTC model for automatic speech recognition"""
 
@@ -26,12 +27,11 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 
 import datasets
+import evaluate
 import numpy as np
 import torch
-import torchaudio.sox_effects as ta_sox
 from datasets import DatasetDict, load_dataset
 
-import evaluate
 import transformers
 from transformers import (
     AutoConfig,
@@ -50,12 +50,27 @@ from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+
+import torchaudio.sox_effects as ta_sox
+from audiomentations import (
+    AddBackgroundNoise,
+    AddGaussianNoise,
+    Compose,
+    # FrequencyMask,
+    # Gain,
+    PitchShift,
+    PolarityInversion,
+    # TimeMask,
+    TimeStretch,
+    OneOf,
+)
+
 # NB
 from utils.normalize_french import FrenchTextNormalizer
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.26.0.dev0")
+check_min_version("4.28.0.dev0")
 
 require_version("datasets>=1.18.0", "To fix: pip install -r examples/pytorch/speech-recognition/requirements.txt")
 
@@ -336,6 +351,33 @@ class DataCollatorCTCWithPadding:
         return batch
 
 
+class SpeechAugmentation:
+    def __init__(self, musan_dir: str = "/home/bhuang/corpus/speech/public/musan_wo_speech"):
+        # todo: reverb
+        # ! customized for each training
+        # bh: tried proba O.5 for all, seems to be too aggressive
+        self.transform = Compose(
+            [
+                OneOf(
+                    [
+                        AddGaussianNoise(min_amplitude=0.005, max_amplitude=0.015, p=1.0),
+                        AddBackgroundNoise(sounds_path=musan_dir, min_snr_in_db=3.0, max_snr_in_db=30.0, noise_transform=PolarityInversion(), p=1.0),
+                    ],
+                    p=0.2,
+                ),
+                TimeStretch(min_rate=0.9, max_rate=1.1, p=0.2, leave_length_unchanged=False),
+                PitchShift(min_semitones=-4, max_semitones=4, p=0.2),
+                # Gain(min_gain_in_db=-6, max_gain_in_db=6, p=0.2),
+                # TimeMask(min_band_part=0.1, max_band_part=0.15, fade=True, p=0.05),
+                # FrequencyMask(min_frequency_band=0.2, max_frequency_band=0.4, p=0.05),
+            ]
+        )
+
+    def __call__(self, waveform, sample_rate):
+        waveform = self.transform(waveform, sample_rate=sample_rate)
+        return waveform
+
+
 def create_vocabulary_from_data(
     datasets: DatasetDict,
     word_delimiter_token: Optional[str] = None,
@@ -361,7 +403,7 @@ def create_vocabulary_from_data(
         lambda vocab_1, vocab_2: set(vocab_1["vocab"][0]) | set(vocab_2["vocab"][0]), vocabs.values()
     )
 
-    vocab_dict = {v: k for k, v in enumerate(sorted(list(vocab_set)))}
+    vocab_dict = {v: k for k, v in enumerate(sorted(vocab_set))}
 
     # replace white space with delimiter token
     if word_delimiter_token is not None:
@@ -439,6 +481,9 @@ def main():
         if data_args.train_file is not None:
             ext = data_args.train_file.rsplit(".", 1)[-1]
             raw_datasets["train"] = load_dataset(ext, data_files=data_args.train_file)["train"]
+        elif data_args.dataset_name == "CUSTOMIZED":
+            from utils.load_datasets import load_train_datasets
+            raw_datasets["train"] = load_train_datasets(model_args, data_args, training_args)
         elif data_args.dataset_name is not None:
             raw_datasets["train"] = load_dataset(
                 data_args.dataset_name,
@@ -447,9 +492,7 @@ def main():
                 use_auth_token=data_args.use_auth_token,
             )
         else:
-            from utils.load_datasets import load_train_datasets
-            raw_datasets["train"] = load_train_datasets(model_args, data_args, training_args)
-            # raise ValueError("You have not specified a dataset name nor a custom train file")
+            raise ValueError("You have not specified a dataset name nor a custom train file")
 
         if data_args.audio_column_name not in raw_datasets["train"].column_names:
             raise ValueError(
@@ -473,6 +516,9 @@ def main():
         if data_args.validation_file is not None:
             ext = data_args.validation_file.rsplit(".", 1)[-1]
             raw_datasets["eval"] = load_dataset(ext, data_files=data_args.validation_file)["train"]
+        elif data_args.dataset_name == "CUSTOMIZED":
+            from utils.load_datasets import load_test_datasets
+            raw_datasets["eval"] = load_test_datasets(model_args, data_args, training_args)
         elif data_args.dataset_name is not None:
             raw_datasets["eval"] = load_dataset(
                 data_args.dataset_name,
@@ -481,9 +527,7 @@ def main():
                 use_auth_token=data_args.use_auth_token,
             )
         else:
-            from utils.load_datasets import load_test_datasets
-            raw_datasets["eval"] = load_test_datasets(model_args, data_args, training_args)
-            # raise ValueError("You have not specified a dataset name nor a custom validation file")
+            raise ValueError("You have not specified a dataset name nor a custom validation file")
 
         if data_args.max_eval_samples is not None:
             raw_datasets["eval"] = raw_datasets["eval"].select(range(data_args.max_eval_samples))
@@ -525,9 +569,9 @@ def main():
         )
         raw_datasets = raw_datasets.cast_column(data_args.audio_column_name, datasets.features.Audio(sampling_rate=sr))
         # bh: save processed data
-        raw_datasets.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/cache/dump_readed")
+        # raw_datasets.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/dump_readed")
         # """
-        # raw_datasets = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/cache/dump_readed")
+        # raw_datasets = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/dump_readed")
 
     # 2. We remove some special characters from the datasets
     # that make training complicated and do not help in transcribing the speech
@@ -570,6 +614,8 @@ def main():
     # bh: save normalized text to create LM
     # tmp_out_path = "data/general/training_data.txt"
     # raw_datasets["train"].to_csv(tmp_out_path, num_proc=data_args.preprocessing_num_workers, columns=["target_text"], index=False, header=False)
+    # tmp_out_path = "data/general/test_data.txt"
+    # raw_datasets["eval"].to_csv(tmp_out_path, num_proc=data_args.preprocessing_num_workers, columns=["target_text"], index=False, header=False)
     # quit()
 
     # save special tokens for tokenizer
@@ -672,7 +718,7 @@ def main():
         config=config,
         use_auth_token=data_args.use_auth_token,
     )
-    # bh: try to load a pretrained ASR model
+    # bh: try to load a pretrained ASR model when #vocab is different
     # model = AutoModelForCTC.from_pretrained(
     #     "outputs/all/wav2vec2-xls-r-1b-ft",
     #     ignore_mismatched_sizes=True,
@@ -711,8 +757,6 @@ def main():
     if do_speech_augment:
         from datasets import concatenate_datasets
 
-        from utils.augmentation import SpeechAugmentation
-
         augmentation = SpeechAugmentation()
 
         def augment_dataset(batch):
@@ -726,20 +770,20 @@ def main():
             batch[audio_column_name]["array"] = augmented_waveform
             return batch
 
-        """
+        # """
         with training_args.main_process_first(desc="dataset map augmentation"):
             # call augment dataset on the training set
             # raw_datasets["train"] = raw_datasets["train"].map(augment_dataset)
-            augmented_raw_training_dataset = raw_datasets["train"].map(
+            # augmented_raw_training_dataset = raw_datasets["train"].map(
+            raw_datasets["train"] = raw_datasets["train"].map(
                 augment_dataset,
-                # num_proc=data_args.preprocessing_num_workers,
-                num_proc=16,
+                num_proc=num_workers,
                 desc="augment train dataset"
             )
-            # add raw training dataset back and shuffle
-            raw_datasets["train"] = concatenate_datasets([raw_datasets["train"], augmented_raw_training_dataset])
-            raw_datasets["train"] = raw_datasets["train"].shuffle(training_args.seed)
-        """
+            # bh: add raw training dataset back and shuffle
+            # raw_datasets["train"] = concatenate_datasets([raw_datasets["train"], augmented_raw_training_dataset])
+            # raw_datasets["train"] = raw_datasets["train"].shuffle(training_args.seed)
+        # """
 
     # Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -760,7 +804,7 @@ def main():
         return batch
 
     with training_args.main_process_first(desc="dataset map preprocessing"):
-        """
+        # """
         vectorized_datasets = raw_datasets.map(
             prepare_dataset,
             remove_columns=next(iter(raw_datasets.values())).column_names,
@@ -778,11 +822,18 @@ def main():
             input_columns=["input_length"],
         )
 
-        # vectorized_datasets.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/cache/dump_vectorized")
-        vectorized_datasets.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/wav2vec2_big_augment/dump_vectorized")
-        """
-        # vectorized_datasets = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/cache/dump_vectorized")
-        vectorized_datasets = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/wav2vec2_big_augment/dump_vectorized")
+        # vectorized_datasets.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/wav2vec2_french_general/dump_vectorized")
+        # vectorized_datasets.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/wav2vec2_french_general/dump_vectorized_augmented")
+        # vectorized_datasets.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/dump_vectorized_wav2vec2")
+        # vectorized_datasets.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/dump_vectorized_wav2vec2_augmented")
+        # """
+        # NB: here we run preprocessing twice, w/ and w/o augmentation, then merge them and shuffle here depeneding on exp
+        # vectorized_datasets = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/wav2vec2_french_general/dump_vectorized")
+        # vectorized_datasets_augmented = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/wav2vec2_french_general/dump_vectorized_augmented")
+        vectorized_datasets = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/dump_vectorized_wav2vec2")
+        vectorized_datasets_augmented = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_merged_and_raw/dump_vectorized_wav2vec2_augmented")
+        vectorized_datasets["train"] = concatenate_datasets([vectorized_datasets["train"], vectorized_datasets_augmented["train"]])
+        vectorized_datasets["train"] = vectorized_datasets["train"].shuffle(training_args.seed)
         print(vectorized_datasets)
 
     # 7. Next, we can prepare the training.
@@ -824,6 +875,8 @@ def main():
 
     try:
         processor = AutoProcessor.from_pretrained(training_args.output_dir)
+        # bh: for pretrained wav2vec2_with_lm model
+        # processor = Wav2Vec2Processor.from_pretrained(training_args.output_sdir)
     except (OSError, KeyError):
         warnings.warn(
             "Loading a processor from a feature extractor config that does not"
@@ -944,8 +997,8 @@ def main():
         # ),
         # "dataset": f"{data_args.dataset_name.upper()} - {config_name.upper()}",
     }
-    if data_args.dataset_name is not None and "common_voice" in data_args.dataset_name:
-        kwargs["language"] = config_name
+    # if "common_voice" in data_args.dataset_name:
+    #     kwargs["language"] = config_name
 
     if training_args.push_to_hub:
         trainer.push_to_hub(**kwargs)
