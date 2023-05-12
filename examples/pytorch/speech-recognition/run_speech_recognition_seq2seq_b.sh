@@ -18,6 +18,15 @@ export OMP_NUM_THREADS=1
 # https://pytorch.org/docs/stable/elastic/run.html
 # export HOST_NODE_ADDR="localhost:29001"
 
+# --gradient_checkpointing \ vs use_cache
+# --ddp_find_unused_parameters="True" \ and layerdrop, but can't do --gradient_checkpointing
+
+# mcv
+# --dataset_name="mozilla-foundation/common_voice_11_0" \
+# --dataset_config_name="fr" \
+# --train_split_name="train+validation" \
+# --length_column_name="input_length" \
+
 # --model_name_or_path="openai/whisper-large" \
 
 # python run_speech_recognition_seq2seq_b.py \
@@ -29,6 +38,7 @@ export OMP_NUM_THREADS=1
 #     --nproc_per_node 2 run_speech_recognition_seq2seq_b.py \
 
 deepspeed --include localhost:0,1,2,3 --master_port 29001 run_speech_recognition_seq2seq_b.py \
+    --dataset_name="CUSTOMIZED" \
     --deepspeed="ds_config.json" \
     --text_column_name="sentence" \
     --use_auth_token \
@@ -53,13 +63,13 @@ deepspeed --include localhost:0,1,2,3 --master_port 29001 run_speech_recognition
     --eval_steps="500" \
     --save_strategy="steps" \
     --save_steps="500" \
-    --save_total_limit="5" \
+    --save_total_limit="3" \
     --metric_for_best_model="wer" \
     --greater_is_better="False" \
     --load_best_model_at_end \
     --freeze_feature_encoder="False" \
-    --use_cache="False" \
     --fp16 \
+    --use_cache="False" \
     --gradient_checkpointing \
     --predict_with_generate \
     --generation_max_length="40" \
@@ -67,10 +77,7 @@ deepspeed --include localhost:0,1,2,3 --master_port 29001 run_speech_recognition
     --do_train \
     --do_eval
 
-# --dataset_name="mozilla-foundation/common_voice_11_0" \
-# --dataset_config_name="fr" \
-# --train_split_name="train+validation" \
-# --length_column_name="input_length" \
+
 
 # --encoder_layerdrop="0.1" \
 # --decoder_layerdrop="0.1" \
@@ -82,15 +89,9 @@ deepspeed --include localhost:0,1,2,3 --master_port 29001 run_speech_recognition
 # --decoder_layerdrop="0.05" \
 # --dropout="0.1" \
 
-# todo --group_by_length \
-# todo mcv here is an old version
-# todo --learning_rate="3e-6" \
-# todo    --optim="adamw_bnb_8bit" \
+
 # todo specaugment
 # --mask_feature_length="10" \
 # --mask_feature_prob="0" \
 # --mask_time_length="10" \
 # --mask_time_prob="0.05" \
-# todo add text normalization
-# todo --gradient_checkpointing \ vs use_cache
-# todo:    --ddp_find_unused_parameters="True" \ and layerdrop, but can't do --gradient_checkpointing
