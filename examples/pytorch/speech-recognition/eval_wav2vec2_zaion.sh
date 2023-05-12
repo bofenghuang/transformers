@@ -3,7 +3,7 @@
 # export TRANSFORMERS_CACHE=/rd_storage/<user>/.cache/huggingface/transformers/
 export HF_DATASETS_CACHE="/projects/bhuang/.cache/huggingface/datasets"
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=1
 
 # bh: load open sourced models
 # model_name_or_path="openai/whisper-small"
@@ -13,10 +13,12 @@ export CUDA_VISIBLE_DEVICES=2
 
 # bh: load local models
 # model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_with_hmhm_lm"
-model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_with_lm"
+# model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_with_lm"
 # model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_with_carglass_lm"
 # model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_with_dekuple_lm"
 # model_name_or_path="outputs/hmhm/wav2vec2-FR-7K-large-ft-medLR-ep30_with_lm"
+
+model_name_or_path="outputs/hmhm_merged_and_raw/lebenchmark-wav2vec2_fr_7k_large-ft-ep15-bs128-lr1e4-wd1e2-aug-drp_with_lm"
 
 outdir=${model_name_or_path}/results
 
@@ -28,36 +30,36 @@ outdir=${model_name_or_path}/results
 
 # bh: --num_workers 1 got "Segmentation fault" error with DataLoader \
 
-# python eval_wav2vec2_zaion.py \
-#     --model_id $model_name_or_path \
-#     --test_csv_file "/home/bhuang/corpus/speech/internal/hm_hm/test_hmhm_10h.csv" \
-#     --id_column_name "ID" \
-#     --audio_column_name "wav" \
-#     --text_column_name "wrd" \
-#     --start_column_name "start" \
-#     --end_column_name "end" \
-#     --length_column_name "duration" \
-#     --preprocessing_num_workers 4 \
-#     --num_workers 0 \
-#     --batch_size 4 \
-#     --log_outputs \
-#     --greedy \
-#     --outdir ${outdir}_hmhm
+python eval_wav2vec2_zaion.py \
+    --model_id $model_name_or_path \
+    --test_csv_file "/home/bhuang/corpus/speech/internal/hm_hm/test_hmhm_10h.csv" \
+    --id_column_name "ID" \
+    --audio_column_name "wav" \
+    --text_column_name "wrd" \
+    --start_column_name "start" \
+    --end_column_name "end" \
+    --length_column_name "duration" \
+    --preprocessing_num_workers 4 \
+    --num_workers 0 \
+    --batch_size 4 \
+    --log_outputs \
+    --greedy \
+    --outdir ${outdir}_hmhm
 
-# python eval_wav2vec2_zaion.py \
-#     --model_id $model_name_or_path \
-#     --test_csv_file "/home/bhuang/corpus/speech/internal/hm_hm/test_hmhm_10h.csv" \
-#     --id_column_name "ID" \
-#     --audio_column_name "wav" \
-#     --text_column_name "wrd" \
-#     --start_column_name "start" \
-#     --end_column_name "end" \
-#     --length_column_name "duration" \
-#     --preprocessing_num_workers 4 \
-#     --num_workers 0 \
-#     --batch_size 4 \
-#     --log_outputs \
-#     --outdir ${outdir}_hmhm_with_lm
+python eval_wav2vec2_zaion.py \
+    --model_id $model_name_or_path \
+    --test_csv_file "/home/bhuang/corpus/speech/internal/hm_hm/test_hmhm_10h.csv" \
+    --id_column_name "ID" \
+    --audio_column_name "wav" \
+    --text_column_name "wrd" \
+    --start_column_name "start" \
+    --end_column_name "end" \
+    --length_column_name "duration" \
+    --preprocessing_num_workers 4 \
+    --num_workers 0 \
+    --batch_size 4 \
+    --log_outputs \
+    --outdir ${outdir}_hmhm_with_lm
 
 # python eval_wav2vec2_zaion.py \
 #     --model_id $model_name_or_path \
@@ -183,17 +185,17 @@ outdir=${model_name_or_path}/results
 #     --log_outputs \
 #     --outdir ${outdir}_lbpa_lot2_with_lm
 
-python eval_wav2vec2_zaion.py \
-    --model_id $model_name_or_path \
-    --test_csv_file "/projects/corpus/voice/zaion/lbpa/2023-02-22/data/data.csv" \
-    --id_column_name "ID" \
-    --audio_column_name "wav" \
-    --text_column_name "wrd" \
-    --start_column_name "start" \
-    --end_column_name "end" \
-    --length_column_name "duration" \
-    --preprocessing_num_workers 4 \
-    --num_workers 0 \
-    --batch_size 4 \
-    --log_outputs \
-    --outdir ${outdir}_lbpa_lot2.1_with_lm
+# python eval_wav2vec2_zaion.py \
+#     --model_id $model_name_or_path \
+#     --test_csv_file "/projects/corpus/voice/zaion/lbpa/2023-02-22/data/data.csv" \
+#     --id_column_name "ID" \
+#     --audio_column_name "wav" \
+#     --text_column_name "wrd" \
+#     --start_column_name "start" \
+#     --end_column_name "end" \
+#     --length_column_name "duration" \
+#     --preprocessing_num_workers 4 \
+#     --num_workers 0 \
+#     --batch_size 4 \
+#     --log_outputs \
+#     --outdir ${outdir}_lbpa_lot2.1_with_lm
