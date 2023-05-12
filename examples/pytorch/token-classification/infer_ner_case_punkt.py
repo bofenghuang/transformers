@@ -12,8 +12,10 @@ import fire
 import pandas as pd
 from tqdm import tqdm
 
-from .predict_ner_case_punkt import TokenClassificationPredictor
+from predict_ner_case_punkt import TokenClassificationPredictor
 from utils.dataset_ner_case_punkt import load_data_files
+
+tqdm.pandas()
 
 
 def read_json_manifest(input_json_file):
@@ -36,9 +38,11 @@ def write_json_manifest(output_json_file, data):
 def main(
     model_name_or_path,
     normalizer_file,
-    input_dir,
-    input_filename,
-    output_suffix,
+    input_csv_file=None,
+    output_csv_file=None,
+    input_dir=None,
+    input_filename=None,
+    output_suffix=None,
     text_column_name="text",
     output_text_column_name="punctuated_text",
 ):
@@ -80,20 +84,40 @@ def main(
     # output_file = "/home/bhuang/corpus/text/internal/punctuation/2022-11-29/data_dekuple_200_generated.csv"
     # input_file = "/home/bhuang/corpus/text/internal/punctuation/2022-11-29/data_carglass_200.csv"
     # output_file = "/home/bhuang/corpus/text/internal/punctuation/2022-11-29/data_carglass_200_generated.csv"
-    df = pd.read_csv(input_file, sep="\t")
+    df = pd.read_csv(input_csv_file, sep="\t")
     print(df.head())
     # df = df.head(5)
     # df["wrd"] = df["wrd"].map(lambda x: tc(x)[0])
     # df["text"] = df["text"].map(lambda x: tc(x)[0])
-    df[output_text_column_name] = df[text_column_name].map(lambda x: tc(x)[0])
+    # df[text_column_name] = df[text_column_name].map(lambda x: tc(x)[0])
+    df[text_column_name] = df[text_column_name].progress_map(lambda x: tc(x)[0])
     print(df.head())
     # df[["ID", "wrd"]].to_csv(output_file, index=False, sep="\t")
     # df[["utt", "text"]].to_csv(output_file, index=False, sep="\t")
-    df.to_csv(output_file, index=False, sep="\t")
+    df.to_csv(output_csv_file, index=False, sep="\t")
     """
 
-    # Iterate files
+    # Infer CSV file using datasets
     # """
+    from datasets import load_dataset
+
+    # ds = load_dataset("csv", data_files=input_csv_file, sep="\t")["train"]
+    # todo: exist "nan" in text
+    ds = load_dataset("csv", data_files=input_csv_file, sep="\t", keep_default_na=False)["train"]
+    print(ds)
+    ds = ds.map(
+        lambda examples: {text_column_name: tc(examples[text_column_name])},
+        batched=True,
+        batch_size=64,
+        load_from_cache_file=False,
+        desc="process",
+    )
+    print(ds)
+    ds.to_csv(output_csv_file, index=False, sep="\t")
+    # """
+
+    # Iterate files
+    """
     for p in Path(input_dir).rglob(input_filename):
         print(f"Punctuate the segments in file {p.as_posix()}")
 
@@ -106,7 +130,7 @@ def main(
 
         output_json_path = f'{p.parent / f"{p.stem}{output_suffix}.json"}'
         write_json_manifest(output_json_path, json_data)
-    # """
+    """
 
     """
     sentences = [
