@@ -60,7 +60,7 @@ class TokenClassificationPredictor:
     # punc_label2text = {"0": "", "COMMA": ",", "PERIOD": ".", "QUESTION": "?"}
     # todo: add threshold
     threshold_punctuation = -1
-    punct_label2text_functions = {
+    punc_label2text_functions = {
         "0": lambda _: "",
         "COMMA": lambda score: "," if score > TokenClassificationPredictor.threshold_punctuation else "",
         "PERIOD": lambda score: "." if score > TokenClassificationPredictor.threshold_punctuation else "",
@@ -285,14 +285,14 @@ class TokenClassificationPredictor:
 
             punc_maxes = np.max(punc_logits_, axis=-1, keepdims=True)
             punc_shifted_exp = np.exp(punc_logits_ - punc_maxes)
-            punct_scores_ = punc_shifted_exp / punc_shifted_exp.sum(axis=-1, keepdims=True)
+            punc_scores_ = punc_shifted_exp / punc_shifted_exp.sum(axis=-1, keepdims=True)
 
             # debug
-            # for input_i_, case_s_, punc_s_ in zip(input_ids_, case_scores_, punct_scores_):
+            # for input_i_, case_s_, punc_s_ in zip(input_ids_, case_scores_, punc_scores_):
             #     print(input_i_, self.tokenizer.convert_ids_to_tokens([input_i_]), case_s_, punc_s_)
             # quit()
 
-            pre_entities_ = self.gather_pre_entities(sentence_, input_ids_, case_scores_, punct_scores_, offset_mapping_)
+            pre_entities_ = self.gather_pre_entities(sentence_, input_ids_, case_scores_, punc_scores_, offset_mapping_)
             entities_ = self.aggregate_words(pre_entities_, aggregation_strategy)
 
             entities.append(entities_)
@@ -364,7 +364,7 @@ class TokenClassificationPredictor:
         sentence: str,
         input_ids: np.ndarray,
         case_scores: np.ndarray,
-        punct_scores: np.ndarray,
+        punc_scores: np.ndarray,
         offset_mapping: np.ndarray,
     ) -> List[dict]:
         pre_entities = []
@@ -395,7 +395,7 @@ class TokenClassificationPredictor:
             pre_entity = {
                 "word": word,
                 "case_scores": case_scores[idx],
-                "punct_scores": punct_scores[idx],
+                "punc_scores": punc_scores[idx],
                 "start": start_ind,
                 "end": end_ind,
                 "index": idx,
@@ -452,15 +452,15 @@ class TokenClassificationPredictor:
         case_entity, case_score = self.aggregate_prediction(
             entities, "case_scores", AggregationStrategy.FIRST, self.config.case_id2label
         )
-        punct_entity, punct_score = self.aggregate_prediction(
-            entities, "punct_scores", AggregationStrategy.LAST, self.config.punc_id2label
+        punc_entity, punc_score = self.aggregate_prediction(
+            entities, "punc_scores", AggregationStrategy.LAST, self.config.punc_id2label
         )
 
         new_entity = {
             "case_entity": case_entity,
             "case_score": case_score,
-            "punct_entity": punct_entity,
-            "punct_score": punct_score,
+            "punc_entity": punc_entity,
+            "punc_score": punc_score,
             "word": word,
             "start": entities[0]["start"],
             "end": entities[-1]["end"],
@@ -491,9 +491,9 @@ class TokenClassificationPredictor:
             new_sentence = ""
             for pred_word in predictions_:
                 recase_funct_ = self.case_label2text_functions.get(pred_word["case_entity"])
-                repunct_funct_ = self.punct_label2text_functions.get(pred_word["punct_entity"])
-                pred_word_text = recase_funct_(pred_word["word"], pred_word["case_score"]) + repunct_funct_(
-                    pred_word["punct_score"]
+                repunc_funct_ = self.punc_label2text_functions.get(pred_word["punc_entity"])
+                pred_word_text = recase_funct_(pred_word["word"], pred_word["case_score"]) + repunc_funct_(
+                    pred_word["punc_score"]
                 )
                 new_sentence += pred_word_text + " "
 

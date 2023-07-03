@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python
 # coding=utf-8
 # Copyright 2022  Bofeng Huang
 

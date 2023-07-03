@@ -1,11 +1,12 @@
 #!/usr/bin/env python
+# coding=utf-8
 # Copyright 2022  Bofeng Huang
 
 from dataclasses import dataclass
 from transformers import DataCollatorForTokenClassification
 
 @dataclass
-class DataCollatorForRecasePunct(DataCollatorForTokenClassification):
+class DataCollatorForCasePunc(DataCollatorForTokenClassification):
     """
     Data collator that will dynamically pad the inputs received, as well as the labels.
 

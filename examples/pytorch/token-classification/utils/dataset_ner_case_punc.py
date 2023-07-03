@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python
 # coding=utf-8
 # Copyright 2022  Bofeng Huang
 
@@ -85,7 +85,8 @@ def load_data_files(
     preprocessing_num_workers: Optional[int] = None,
     overwrite_cache: bool = False,
 ):
-    task_configs = ["case", "eos", "punc"]
+    # task_configs = ["case", "eos", "punc"]
+    task_configs = ["case", "punc"]
 
     if isinstance(task_config, str):
         task_config = [task_config]
@@ -95,7 +96,7 @@ def load_data_files(
     if replacers is not None and any(task_config_ not in task_configs for task_config_ in replacers.keys()):
         raise ValueError("Invalid replacers")
 
-    task_column_indices = [task_configs.index(task_config_) + 1 for task_config_ in task_config]
+    # task_column_indices = [task_configs.index(task_config_) + 1 for task_config_ in task_config]
     label_names = [f"{task_config_}_label" for task_config_ in task_config]
 
     def my_gen():
@@ -109,7 +110,7 @@ def load_data_files(
                 p.as_posix(),
                 sep="\t",
                 header=None,
-                usecols=[0] + task_column_indices,
+                # usecols=[0] + task_column_indices,
                 names=["word"] + label_names,
                 dtype={"word": str, **{label_: str for label_ in label_names}},
             )
