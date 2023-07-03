@@ -42,7 +42,7 @@ export CUDA_VISIBLE_DEVICES=3
 # --run_name=$WANDB_NAME \
 
 
-# python3 run_ner_case_punkt.py \
+# python3 run_ner_case_punc.py \
 # 	--task_config '["case", "punc"]' \
 # 	--train_data_dir "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/train" \
 # 	--validation_data_dir "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/validation" \
@@ -76,7 +76,7 @@ export CUDA_VISIBLE_DEVICES=3
 # 	--do_train \
 # 	--do_eval
 
-python3 run_ner_case_punkt.py \
+python3 run_ner_case_punc.py \
 	--task_config '["case", "punc"]' \
 	--train_data_dir "/projects/bhuang/corpus/text/flaubert/raw/multilingual_plus/data/train" \
 	--validation_data_dir "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/validation" \
@@ -112,7 +112,7 @@ python3 run_ner_case_punkt.py \
 	--do_predict
 
 
-python3 run_ner_case_punkt.py \
+python3 run_ner_case_punc.py \
 	--task_config '["case", "punc"]' \
 	--train_data_dir "/projects/bhuang/corpus/text/flaubert/raw/multilingual_plus/data/train" \
 	--validation_data_dir "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/validation" \
@@ -148,7 +148,7 @@ python3 run_ner_case_punkt.py \
 	--do_predict
 
 
-# python3 run_ner_case_punkt.py \
+# python3 run_ner_case_punc.py \
 # 	--task_config '["case", "punc"]' \
 # 	--train_data_dir "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/train" \
 # 	--test_data_dir "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/tmp" \

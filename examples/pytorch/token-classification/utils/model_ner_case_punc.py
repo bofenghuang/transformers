@@ -1,4 +1,4 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python
 # coding=utf-8
 # Copyright 2022  Bofeng Huang
 
@@ -13,7 +13,7 @@ from transformers.modeling_outputs import ModelOutput
 
 
 @dataclass
-class RecasePuncOutput(ModelOutput):
+class CasePuncOutput(ModelOutput):
     loss: Optional[torch.FloatTensor] = None
     case_logits: torch.FloatTensor = None
     punc_logits: torch.FloatTensor = None
@@ -21,7 +21,7 @@ class RecasePuncOutput(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
 
-class RobertaForRecasePunct(RobertaPreTrainedModel):
+class RobertaForCasePunc(RobertaPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -55,7 +55,7 @@ class RobertaForRecasePunct(RobertaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor], RecasePuncOutput]:
+    ) -> Union[Tuple[torch.Tensor], CasePuncOutput]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the token classification loss. Indices should be in `[0, ..., config.num_labels - 1]`.
@@ -98,7 +98,7 @@ class RobertaForRecasePunct(RobertaPreTrainedModel):
             output = (case_logits, punc_logits) + outputs[2:]
             return ((loss,) + output) if loss is not None else output
 
-        return RecasePuncOutput(
+        return CasePuncOutput(
             loss=loss,
             # logits=logits,
             case_logits=case_logits,
@@ -109,7 +109,7 @@ class RobertaForRecasePunct(RobertaPreTrainedModel):
 
 
 if __name__ == "__main__":
-    model = RobertaForRecasePunct.from_pretrained("camembert-base", num_case_labels=3, num_punc_labels=4)
+    model = RobertaForCasePunctuation.from_pretrained("camembert-base", num_case_labels=3, num_punc_labels=4)
     input_tensors = torch.randint(10000, (1, 32))
     case_labels = torch.randint(3, (1, 32))
     punc_labels = torch.randint(4, (1, 32))

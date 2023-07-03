@@ -50,6 +50,8 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+from utils.model_ner_case_punc import RobertaForCasePunc
+from utils.collator_ner_case_punc import DataCollatorForCasePunc
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.26.0.dev0")
@@ -212,6 +214,10 @@ class DataTrainingArguments:
                 extension = self.validation_file.split(".")[-1]
                 assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
         self.task_name = self.task_name.lower()
+        if self.task_config is not None:
+            self.task_config = json.loads(self.task_config)
+        if self.preprocess_label_strategy is not None:
+            self.preprocess_label_strategy = json.loads(self.preprocess_label_strategy)
         if self.preprocess_label_replacers is not None:
             self.preprocess_label_replacers = json.loads(self.preprocess_label_replacers)
 
@@ -283,7 +289,7 @@ def main():
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
     if data_args.train_data_dir is not None or data_args.validation_data_dir is not None or data_args.test_data_dir is not None:
-        from dataset_ner_punct import load_data_files, tokenize_and_align_examples
+        from utils.dataset_ner_case_punc import load_data_files, tokenize_and_align_examples
         load_data_files_ = partial(
             load_data_files,
             task_config=data_args.task_config,
@@ -357,16 +363,24 @@ def main():
 
     # If the labels are of type ClassLabel, they are already integers and we have the map stored somewhere.
     # Otherwise, we have to get the list of labels manually.
-    labels_are_int = isinstance(features[label_column_name].feature, ClassLabel)
-    if labels_are_int:
-        label_list = features[label_column_name].feature.names
-        label_to_id = {i: i for i in range(len(label_list))}
-    else:
-        label_list = get_label_list(raw_datasets["train"][label_column_name])
-        label_to_id = {l: i for i, l in enumerate(label_list)}
+    # labels_are_int = isinstance(features[label_column_name].feature, ClassLabel)
+    # if labels_are_int:
+    #     label_list = features[label_column_name].feature.names
+    #     label_to_id = {i: i for i in range(len(label_list))}
+    # else:
+    #     label_list = get_label_list(raw_datasets["train"][label_column_name])
+    #     label_to_id = {l: i for i, l in enumerate(label_list)}
 
-    num_labels = len(label_list)
+    # num_labels = len(label_list)
 
+    label_names = [column_name_[:-6] for column_name_ in column_names if column_name_[-6:] == "_label"]
+    label_lists_by_choice = {}
+    label_to_id_by_choice = {}
+    for label_name_ in label_names:
+        label_lists_by_choice[label_name_] = get_label_list(raw_datasets["train"][f"{label_name_}_label"])
+        label_to_id_by_choice[label_name_] = {l: i for i, l in enumerate(label_lists_by_choice[label_name_])}
+    # not used
+    num_labels = 2
     # Load pretrained model and tokenizer
     #
     # Distributed training:
@@ -400,12 +414,14 @@ def main():
             use_auth_token=True if model_args.use_auth_token else None,
         )
 
-        # NB: this model has a wrong maxlength value, so we need to set it manually
+        # this model has a wrong maxlength value, so we need to set it manually
         if tokenizer_name_or_path == "camembert/camembert-large":
             tokenizer.model_max_length = 512
 
-    model = AutoModelForTokenClassification.from_pretrained(
+    model = RobertaForCasePunc.from_pretrained(
         model_args.model_name_or_path,
+        num_case_labels=len(label_lists_by_choice["case"]),
+        num_punc_labels=len(label_lists_by_choice["punc"]),
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
         cache_dir=model_args.cache_dir,
@@ -423,25 +439,29 @@ def main():
         )
 
     # Model has labels -> use them.
-    if model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id:
-        if list(sorted(model.config.label2id.keys())) == list(sorted(label_list)):
-            # Reorganize `label_list` to match the ordering of the model.
-            if labels_are_int:
-                label_to_id = {i: int(model.config.label2id[l]) for i, l in enumerate(label_list)}
-                label_list = [model.config.id2label[i] for i in range(num_labels)]
-            else:
-                label_list = [model.config.id2label[i] for i in range(num_labels)]
-                label_to_id = {l: i for i, l in enumerate(label_list)}
-        else:
-            logger.warning(
-                "Your model seems to have been trained with labels, but they don't match the dataset: ",
-                f"model labels: {list(sorted(model.config.label2id.keys()))}, dataset labels:"
-                f" {list(sorted(label_list))}.\nIgnoring the model labels as a result.",
-            )
+    # if model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id:
+    #     if list(sorted(model.config.label2id.keys())) == list(sorted(label_list)):
+    #         # Reorganize `label_list` to match the ordering of the model.
+    #         if labels_are_int:
+    #             label_to_id = {i: int(model.config.label2id[l]) for i, l in enumerate(label_list)}
+    #             label_list = [model.config.id2label[i] for i in range(num_labels)]
+    #         else:
+    #             label_list = [model.config.id2label[i] for i in range(num_labels)]
+    #             label_to_id = {l: i for i, l in enumerate(label_list)}
+    #     else:
+    #         logger.warning(
+    #             "Your model seems to have been trained with labels, but they don't match the dataset: ",
+    #             f"model labels: {list(sorted(model.config.label2id.keys()))}, dataset labels:"
+    #             f" {list(sorted(label_list))}.\nIgnoring the model labels as a result.",
+    #         )
 
     # Set the correspondences label/ID inside the model config
-    model.config.label2id = {l: i for i, l in enumerate(label_list)}
-    model.config.id2label = {i: l for i, l in enumerate(label_list)}
+    # model.config.label2id = {l: i for i, l in enumerate(label_list)}
+    # model.config.id2label = {i: l for i, l in enumerate(label_list)}
+    model.config.case_label2id = {l: i for i, l in enumerate(label_lists_by_choice["case"])}
+    model.config.case_id2label = {i: l for i, l in enumerate(label_lists_by_choice["case"])}
+    model.config.punc_label2id = {l: i for i, l in enumerate(label_lists_by_choice["punc"])}
+    model.config.punc_id2label = {i: l for i, l in enumerate(label_lists_by_choice["punc"])}
 
     # Map that sends B-Xxx label to its I-Xxx counterpart
     # b_to_i_label = []
@@ -456,49 +476,49 @@ def main():
     padding = "max_length" if data_args.pad_to_max_length else False
 
     # Tokenize all texts and align the labels with them.
-    def tokenize_and_align_labels(examples):
-        tokenized_inputs = tokenizer(
-            examples[text_column_name],
-            padding=padding,
-            truncation=True,
-            max_length=data_args.max_seq_length,
-            # We use this argument because the texts in our dataset are lists of words (with a label for each word).
-            is_split_into_words=True,
-        )
-        labels = []
-        for i, label in enumerate(examples[label_column_name]):
-            word_ids = tokenized_inputs.word_ids(batch_index=i)
-            previous_word_idx = None
-            label_ids = []
-            for word_idx in word_ids:
-                # Special tokens have a word id that is None. We set the label to -100 so they are automatically
-                # ignored in the loss function.
-                if word_idx is None:
-                    label_ids.append(-100)
-                # We set the label for the first token of each word.
-                elif word_idx != previous_word_idx:
-                    label_ids.append(label_to_id[label[word_idx]])
-                # For the other tokens in a word, we set the label to either the current label or -100, depending on
-                # the label_all_tokens flag.
-                else:
-                    if data_args.label_all_tokens:
-                        label_ids.append(b_to_i_label[label_to_id[label[word_idx]]])
-                    else:
-                        label_ids.append(-100)
-                previous_word_idx = word_idx
+    # def tokenize_and_align_labels(examples):
+    #     tokenized_inputs = tokenizer(
+    #         examples[text_column_name],
+    #         padding=padding,
+    #         truncation=True,
+    #         max_length=data_args.max_seq_length,
+    #         # We use this argument because the texts in our dataset are lists of words (with a label for each word).
+    #         is_split_into_words=True,
+    #     )
+    #     labels = []
+    #     for i, label in enumerate(examples[label_column_name]):
+    #         word_ids = tokenized_inputs.word_ids(batch_index=i)
+    #         previous_word_idx = None
+    #         label_ids = []
+    #         for word_idx in word_ids:
+    #             # Special tokens have a word id that is None. We set the label to -100 so they are automatically
+    #             # ignored in the loss function.
+    #             if word_idx is None:
+    #                 label_ids.append(-100)
+    #             # We set the label for the first token of each word.
+    #             elif word_idx != previous_word_idx:
+    #                 label_ids.append(label_to_id[label[word_idx]])
+    #             # For the other tokens in a word, we set the label to either the current label or -100, depending on
+    #             # the label_all_tokens flag.
+    #             else:
+    #                 if data_args.label_all_tokens:
+    #                     label_ids.append(b_to_i_label[label_to_id[label[word_idx]]])
+    #                 else:
+    #                     label_ids.append(-100)
+    #             previous_word_idx = word_idx
 
-            labels.append(label_ids)
-        tokenized_inputs["labels"] = labels
-        return tokenized_inputs
+    #         labels.append(label_ids)
+    #     tokenized_inputs["labels"] = labels
+    #     return tokenized_inputs
 
     tokenize_and_align_examples_ = partial(
         tokenize_and_align_examples,
         tokenizer=tokenizer,
-        label_to_id=label_to_id,
+        label_names=label_names,
+        label_to_id_mappings=label_to_id_by_choice,
+        label_strategies=data_args.preprocess_label_strategy,
         text_column_name=text_column_name,
-        label_column_name=label_column_name,
         stride=data_args.preprocess_stride,
-        label_strategy=data_args.preprocess_label_strategy,
     )
 
     if training_args.do_train:
@@ -577,55 +597,59 @@ def main():
             )
 
     # Data collator
-    data_collator = DataCollatorForTokenClassification(tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
+    # data_collator = DataCollatorForTokenClassification(tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
+    data_collator = DataCollatorForCasePunc(tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
 
     # Metrics
     # metric = evaluate.load("seqeval")
 
     def compute_metrics(p):
         predictions, labels = p
-        predictions = np.argmax(predictions, axis=2)
+        # predictions = np.argmax(predictions, axis=2)
+        predictions = [np.argmax(predictions_, axis=2) for predictions_ in predictions]
 
-        # Remove ignored index (special tokens)
-        true_predictions = [
-            [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(predictions, labels)
-        ]
-        true_labels = [
-            [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(predictions, labels)
-        ]
+        output = {}
+        for idx, (label_name, label_list) in enumerate(label_lists_by_choice.items()):
+            # Remove ignored index (special tokens)
+            true_predictions = [
+                [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
+                for prediction, label in zip(predictions[idx], labels[idx])
+            ]
+            true_labels = [
+                [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
+                for prediction, label in zip(predictions[idx], labels[idx])
+            ]
 
-        # results = metric.compute(predictions=true_predictions, references=true_labels)
-        # if data_args.return_entity_level_metrics:
-        #     # Unpack nested dictionaries
-        #     final_results = {}
-        #     for key, value in results.items():
-        #         if isinstance(value, dict):
-        #             for n, v in value.items():
-        #                 final_results[f"{key}_{n}"] = v
-        #         else:
-        #             final_results[key] = value
-        #     return final_results
-        # else:
-        #     return {
-        #         "precision": results["overall_precision"],
-        #         "recall": results["overall_recall"],
-        #         "f1": results["overall_f1"],
-        #         "accuracy": results["overall_accuracy"],
-        #     }
+            # results = metric.compute(predictions=true_predictions, references=true_labels)
+            # if data_args.return_entity_level_metrics:
+            #     # Unpack nested dictionaries
+            #     final_results = {}
+            #     for key, value in results.items():
+            #         if isinstance(value, dict):
+            #             for n, v in value.items():
+            #                 final_results[f"{key}_{n}"] = v
+            #         else:
+            #             final_results[key] = value
+            #     return final_results
+            # else:
+            #     return {
+            #         "precision": results["overall_precision"],
+            #         "recall": results["overall_recall"],
+            #         "f1": results["overall_f1"],
+            #         "accuracy": results["overall_accuracy"],
+            #     }
 
-        true_labels = [true_l_ for true_labels_ in true_labels for true_l_ in true_labels_]
-        true_predictions = [true_p_ for true_preds in true_predictions for true_p_ in true_preds]
-        precision_, recall_, fscore_, _ = precision_recall_fscore_support(true_labels, true_predictions, average='weighted')
-        accuracy_ = accuracy_score(true_labels, true_predictions)
+            true_labels = [true_l_ for true_labels_ in true_labels for true_l_ in true_labels_]
+            true_predictions = [true_p_ for true_preds in true_predictions for true_p_ in true_preds]
+            precision_, recall_, fscore_, _ = precision_recall_fscore_support(true_labels, true_predictions, average='weighted')
+            accuracy_ = accuracy_score(true_labels, true_predictions)
 
-        return {
-            "precision": precision_,
-            "recall": recall_,
-            "f1": fscore_,
-            "accuracy": accuracy_,
-        }
+            output[f"{label_name}_precision"] = precision_
+            output[f"{label_name}_recall"] = recall_
+            output[f"{label_name}_f1"] = fscore_
+            output[f"{label_name}_accuracy"] = accuracy_
+
+        return output
 
     # Initialize our Trainer
     trainer = Trainer(
@@ -675,35 +699,37 @@ def main():
         logger.info("*** Predict ***")
 
         predictions, labels, metrics = trainer.predict(predict_dataset, metric_key_prefix="predict")
-        predictions = np.argmax(predictions, axis=2)
-
-        # Remove ignored index (special tokens)
-        true_predictions = [
-            [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(predictions, labels)
-        ]
+        # predictions = np.argmax(predictions, axis=2)
+        predictions = [np.argmax(predictions_, axis=2) for predictions_ in predictions]
 
         trainer.log_metrics("predict", metrics)
         trainer.save_metrics("predict", metrics)
 
-        # Save predictions
-        output_predictions_file = os.path.join(training_args.output_dir, "predictions.txt")
-        if trainer.is_world_process_zero():
-            with open(output_predictions_file, "w") as writer:
-                for prediction in true_predictions:
-                    writer.write(" ".join(prediction) + "\n")
+        for idx, (label_name, label_list) in enumerate(label_lists_by_choice.items()):
+            # Remove ignored index (special tokens)
+            true_predictions = [
+                [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
+                for prediction, label in zip(predictions[idx], labels[idx])
+            ]
 
-        # Remove ignored index (special tokens)
-        true_labels = [
-            [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(predictions, labels)
-        ]
-        # Save labels
-        output_labels_file = os.path.join(training_args.output_dir, "references.txt")
-        if trainer.is_world_process_zero():
-            with open(output_labels_file, "w") as writer:
-                for l in true_labels:
-                    writer.write(" ".join(l) + "\n")
+            # Save predictions
+            output_predictions_file = os.path.join(training_args.output_dir, f"{label_name}_predictions.txt")
+            if trainer.is_world_process_zero():
+                with open(output_predictions_file, "w") as writer:
+                    for prediction in true_predictions:
+                        writer.write(" ".join(prediction) + "\n")
+
+            # Remove ignored index (special tokens)
+            true_labels = [
+                [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
+                for prediction, label in zip(predictions[idx], labels[idx])
+            ]
+            # Save labels
+            output_labels_file = os.path.join(training_args.output_dir, f"{label_name}_references.txt")
+            if trainer.is_world_process_zero():
+                with open(output_labels_file, "w") as writer:
+                    for l in true_labels:
+                        writer.write(" ".join(l) + "\n")
 
         # todo: add final metrics
 
