@@ -52,6 +52,7 @@ from transformers.utils.versions import require_version
 
 from utils.model_ner_case_punc import RobertaForCasePunc
 from utils.collator_ner_case_punc import DataCollatorForCasePunc
+# from utils.callbacks_ner_case_punc import WandbProgressResultsCallback
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.26.0.dev0")
@@ -223,6 +224,7 @@ class DataTrainingArguments:
 
 
 def main():
+# def main(args):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
@@ -234,6 +236,9 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+    # debug
+    # model_args, data_args, training_args = parser.parse_args_into_dataclasses(args=args)
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
@@ -651,6 +656,19 @@ def main():
 
         return output
 
+    # Logging prediction wandb callback
+    # sample_dataset = load_dataset("text", data_files="/home/bhuang/transformers/examples/pytorch/token-classification/tmp_test.txt")["train"]
+    # sample_dataset = sample_dataset.map(
+    #     lambda x: tokenizer(
+    #         x["text"],
+    #         padding=True,
+    #         truncation=True,
+    #         return_offsets_mapping=True,
+    #         return_tensors="pt",
+    #     ),
+    #     batched=True
+    # )
+
     # Initialize our Trainer
     trainer = Trainer(
         model=model,
@@ -661,6 +679,11 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
+
+    # create the callback
+    # progress_callback = WandbProgressResultsCallback(trainer, sample_dataset)
+    # add the callback to the trainer
+    # trainer.add_callback(progress_callback)
 
     # Training
     if training_args.do_train:
