@@ -4,7 +4,7 @@
 
 from typing import List, Optional, Tuple, Union
 from dataclasses import dataclass
-
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
@@ -15,6 +15,9 @@ from transformers.modeling_outputs import ModelOutput
 @dataclass
 class CasePuncOutput(ModelOutput):
     loss: Optional[torch.FloatTensor] = None
+    # todo
+    # case_loss: Optional[torch.FloatTensor] = None
+    # punc_loss: Optional[torch.FloatTensor] = None
     case_logits: torch.FloatTensor = None
     punc_logits: torch.FloatTensor = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
@@ -84,14 +87,45 @@ class RobertaForCasePunc(RobertaPreTrainedModel):
         # logits = torch.stack([case_logits, punc_logits], dim=2)
 
         loss = None
+        # todo
+        # case_loss = None
+        # punc_loss = None
         # if labels is not None:
         #     loss_fct = CrossEntropyLoss()
         #     loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
         if case_labels is not None and punc_labels is not None:
+            # CE
             loss_fct = CrossEntropyLoss()
+            # Focal loss
+            # from .losses import MultiClassFocalLoss
+            # loss_fct = MultiClassFocalLoss(gamma=2.0)
+            # CB CE
+            # from .losses import ClassBalancedCrossEntroy
+            # loss_fct_punc = ClassBalancedCrossEntroy(num_samples=self.num_samples_punc, beta=0.99)
+
+            # coeffs = 1 / np.sqrt(self.num_samples_punc)
+            # coeffs = coeffs / coeffs.sum()
+            # coeffs = torch.from_numpy(coeffs).float().cuda()
+
+            # weighted loss for punctuation
+            # class_weights = [0.02325581, 0.23255814, 0.02325581, 0.23255814, 0.23255814, 0.02325581, 0.23255814]
+            # class_weights = [1, 10, 1, 10, 10, 1, 10]
+            # class_weights = [1, 2, 1, 2, 2, 1, 2]
+            # class_weights = [1, 1, 1, 2, 1, 1, 1]
+            class_weights = [1, 1, 2, 1, 1, 1]
+            class_weights = np.asarray(class_weights)
+            class_weights = torch.from_numpy(class_weights).float().cuda()
+
+            loss_fct_punc = CrossEntropyLoss(weight=class_weights)
+
             case_loss = loss_fct(case_logits.view(-1, self.num_case_labels), case_labels.view(-1))
-            punc_loss = loss_fct(punc_logits.view(-1, self.num_punc_labels), punc_labels.view(-1))
-            loss = case_loss + punc_loss
+            # punc_loss = loss_fct(punc_logits.view(-1, self.num_punc_labels), punc_labels.view(-1))
+            punc_loss = loss_fct_punc(punc_logits.view(-1, self.num_punc_labels), punc_labels.view(-1))
+
+            # loss = case_loss + punc_loss
+            loss = (case_loss + punc_loss) / 2.0
+            # todo: weighted sum
+            # loss = alpha * case_loss + (1 - alpha) * punc_loss
 
         if not return_dict:
             # output = (logits,) + outputs[2:]
@@ -100,6 +134,9 @@ class RobertaForCasePunc(RobertaPreTrainedModel):
 
         return CasePuncOutput(
             loss=loss,
+            # todo
+            # case_loss=case_loss,
+            # punc_loss=punc_loss,
             # logits=logits,
             case_logits=case_logits,
             punc_logits=punc_logits,
@@ -109,7 +146,7 @@ class RobertaForCasePunc(RobertaPreTrainedModel):
 
 
 if __name__ == "__main__":
-    model = RobertaForCasePunctuation.from_pretrained("camembert-base", num_case_labels=3, num_punc_labels=4)
+    model = RobertaForCasePunc.from_pretrained("camembert-base", num_case_labels=3, num_punc_labels=4)
     input_tensors = torch.randint(10000, (1, 32))
     case_labels = torch.randint(3, (1, 32))
     punc_labels = torch.randint(4, (1, 32))

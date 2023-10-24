@@ -50,6 +50,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+from utils.dataset_ner_punc import load_data_files, tokenize_and_align_examples
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.26.0.dev0")
@@ -283,7 +284,7 @@ def main():
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
     if data_args.train_data_dir is not None or data_args.validation_data_dir is not None or data_args.test_data_dir is not None:
-        from utils.dataset_ner_punc import load_data_files, tokenize_and_align_examples
+
         load_data_files_ = partial(
             load_data_files,
             task_config=data_args.task_config,

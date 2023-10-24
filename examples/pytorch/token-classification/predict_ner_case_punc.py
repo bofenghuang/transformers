@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from transformers import AutoConfig, AutoModelForTokenClassification, AutoTokenizer, BatchEncoding
 
-from utils.model_ner_case_punkt import RobertaForRecasePunct
+from utils.model_ner_case_punc import RobertaForCasePunc
 from utils.normalize_text import TextNormalizer
 
 
@@ -66,6 +66,9 @@ class TokenClassificationPredictor:
         "PERIOD": lambda score: "." if score > TokenClassificationPredictor.threshold_punctuation else "",
         # todo multilingual
         "QUESTION": lambda score: " ?" if score > TokenClassificationPredictor.threshold_punctuation else "",
+        "EXCLAMATION": lambda score: " !" if score > TokenClassificationPredictor.threshold_punctuation else "",
+        "COLON": lambda score: " :" if score > TokenClassificationPredictor.threshold_punctuation else "",
+        "ELLIPSIS": lambda score: "..." if score > TokenClassificationPredictor.threshold_punctuation else "",
     }
 
     def __init__(
@@ -91,7 +94,7 @@ class TokenClassificationPredictor:
         # load model
         # todo: onnx
         # model = AutoModelForTokenClassification.from_pretrained(model_name_or_path)
-        model = RobertaForRecasePunct.from_pretrained(
+        model = RobertaForCasePunc.from_pretrained(
             model_name_or_path,
             num_case_labels=len(self.config.case_id2label.keys()),
             num_punc_labels=len(self.config.punc_id2label.keys()),
@@ -508,7 +511,7 @@ class TokenClassificationPredictor:
         return new_sentences
 
 
-def main():
+def main(model_name_or_path):
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/punc/camembert-base_ft"
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/punc/camembert-large_ft"
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/punc/xlm-roberta-base_ft"
@@ -517,7 +520,10 @@ def main():
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc/xlm-roberta-base_ft"
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc-multilingual/xlm-roberta-large_ft"
     # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc-multilingual_plus/xlm-roberta-base_ft"
-    model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc-multilingual_plus/xlm-roberta-large_ft"
+    # model_name_or_path = "/home/bhuang/transformers/examples/pytorch/token-classification/outputs/recasepunc-multilingual_plus/xlm-roberta-large_ft"
+    # model_name_or_path = "outputs/casepunc_fr/xlm_roberta_large_ft_bs256_lr5e5"
+
+
     # test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/test"
     # test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/fr_europarl/data/tmp"
     # test_data_dir = "/projects/bhuang/corpus/text/flaubert/raw/en_europarl/data/test"
@@ -546,14 +552,20 @@ def main():
         # "qué tal",
         # "que es la pregunta",
         # "what's up",
-        "ça d'accord donc après vous allez recevoir un mail de confirmation tout en bas vous retrouverez en lien bleu qui vous permettra de nous retourner la photo de la carte verte ainsi que la quatre et là pour qu'on puisse finaliser la prise en charge d'assurance d'accord parfait donc là monsieur visio le technicien se déplace donc au dix-neuf route de déduit h a rempli donc il y a pour le mardi le dix-sept janvier dans la matinée entre huit et treize heures pour une heure trente je vous envoie la confirmation et donc c'est par rapport à votre chantier également aussi de métal également vous nous contactez tout simplement pour qu'on puisse modifier l adresse pour l'intervention d'accord",
+        "merci beaucoup au revoir",
+        "joyeux anniversaire muiriel",
+        "donc là elle elle est en train d' étudier votre dossier",
+        "oui d' accord je vous remercie donc oui eh bah dites moi du coup pour le digi code que je le donne à l' expert",
+        "bienvenue chez eurexo meldie bonjour",
+        # "ça d'accord donc après vous allez recevoir un mail de confirmation tout en bas vous retrouverez en lien bleu qui vous permettra de nous retourner la photo de la carte verte ainsi que la quatre et là pour qu'on puisse finaliser la prise en charge d'assurance d'accord parfait donc là monsieur visio le technicien se déplace donc au dix-neuf route de déduit h a rempli donc il y a pour le mardi le dix-sept janvier dans la matinée entre huit et treize heures pour une heure trente je vous envoie la confirmation et donc c'est par rapport à votre chantier également aussi de métal également vous nous contactez tout simplement pour qu'on puisse modifier l adresse pour l'intervention d'accord",
+        "euh c' est c' est avec les assurances habitations je crois enfin enfin je veux dire oui c' est bien ça avec les assurances habitations",
     ]
     for sentence in sentences:
         # print(tc(sentence))
         res = tc.predict(sentence)
         print(tc.prediction_to_text(res)[0])
-        for r in res[0]:
-            print(r)
+        # for r in res[0]:
+        #     print(r)
 
 
 if __name__ == "__main__":
