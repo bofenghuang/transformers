@@ -12,21 +12,18 @@ import fire
 import pandas as pd
 from tqdm import tqdm
 
-from predict_ner_case_punkt import TokenClassificationPredictor
-from utils.dataset_ner_case_punkt import load_data_files
+from predict_ner_case_punc import TokenClassificationPredictor
 
 tqdm.pandas()
 
 
-def read_json_manifest(input_json_file):
-    data = []
+def jsonl_load(input_json_file):
     with open(input_json_file, "r") as inf:
-        for line in inf:
-            data.append(json.loads(line.strip()))
+        data = [json.loads(line.strip()) for line in inf]
     return data
 
 
-def write_json_manifest(output_json_file, data):
+def jsonl_dump(output_json_file, data):
     output_dir = os.path.dirname(output_json_file)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -41,6 +38,7 @@ def main(
     input_csv_file=None,
     output_csv_file=None,
     input_dir=None,
+    output_dir=None,
     input_filename=None,
     output_suffix=None,
     text_column_name="text",
@@ -78,7 +76,7 @@ def main(
 
     print(f"Model from {model_name_or_path} has been loaded")
 
-    # Inference CSV file
+    # Infer CSV file
     """
     # input_file = "/home/bhuang/corpus/text/internal/punctuation/2022-11-29/data_dekuple_200.csv"
     # output_file = "/home/bhuang/corpus/text/internal/punctuation/2022-11-29/data_dekuple_200_generated.csv"
@@ -98,7 +96,7 @@ def main(
     """
 
     # Infer CSV file using datasets
-    # """
+    """
     from datasets import load_dataset
 
     # ds = load_dataset("csv", data_files=input_csv_file, sep="\t")["train"]
@@ -114,14 +112,14 @@ def main(
     )
     print(ds)
     ds.to_csv(output_csv_file, index=False, sep="\t")
-    # """
+    """
 
-    # Iterate files
+    # Iterate and infer jsonl files
     """
     for p in Path(input_dir).rglob(input_filename):
         print(f"Punctuate the segments in file {p.as_posix()}")
 
-        json_data = read_json_manifest(p.as_posix())
+        json_data = jsonl_load(p.as_posix())
         for row in tqdm(json_data):
             if row[text_column_name]:
                 row[output_text_column_name] = tc(row[text_column_name])[0]
@@ -129,8 +127,39 @@ def main(
                 row[output_text_column_name] = row[text_column_name]
 
         output_json_path = f'{p.parent / f"{p.stem}{output_suffix}.json"}'
-        write_json_manifest(output_json_path, json_data)
+        jsonl_dump(output_json_path, json_data)
     """
+
+    # Iterate and infer text files
+    # """
+    from datasets import load_dataset
+    
+    sys.path.append("/home/bhuang/nlp/punkt_alpha2digits")
+    from convert_alpha_to_digits import convert_text_to_num
+
+    def process_function(example):
+        prefix, tmp_text = example["text"].split(":", 1)
+        prefix = prefix.strip()
+        tmp_text = tmp_text.strip()
+
+        # todo: optimize for parallel inference
+        tmp_text = tc(tmp_text)[0]
+        tmp_text = convert_text_to_num(tmp_text)
+
+        example["text"] = prefix + ": " + tmp_text
+
+        return example
+
+    input_file_paths = list(Path(input_dir).glob(input_filename))
+    for p in input_file_paths:
+        ds_ = load_dataset("text", data_files=p.as_posix())["train"]
+
+        ds_ = ds_.map(process_function)
+
+        output_file = Path(output_dir) / p.name
+        ds_.to_csv(output_file, sep="\t", index=False, header=False)
+
+    # """
 
     """
     sentences = [
@@ -151,6 +180,8 @@ def main(
     """
 
     """
+    from utils.dataset_ner_case_punkt import load_data_files
+
     # don't forget replacers cc
     # test_ds = load_data_files(test_data_dir, task_config="punc", replacers={"EXCLAMATION": "PERIOD"}, preprocessing_num_workers=16)
     # test_ds = load_data_files(test_data_dir, task_config="eos", preprocessing_num_workers=16)

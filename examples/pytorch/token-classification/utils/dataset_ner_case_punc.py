@@ -100,7 +100,9 @@ def load_data_files(
     label_names = [f"{task_config_}_label" for task_config_ in task_config]
 
     def my_gen():
+        # NB
         paths = Path(data_dir).rglob("*.tsv")
+        # paths = Path(data_dir).rglob("fr*/*.tsv")
         paths_list = list(paths)
 
         # data = []

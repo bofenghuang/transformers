@@ -26,6 +26,7 @@ import sys
 from dataclasses import dataclass, field
 import json
 from typing import Optional
+from collections import Counter
 
 import datasets
 import numpy as np
@@ -52,6 +53,7 @@ from transformers.utils.versions import require_version
 
 from utils.model_ner_case_punc import RobertaForCasePunc
 from utils.collator_ner_case_punc import DataCollatorForCasePunc
+from utils.dataset_ner_case_punc import load_data_files, tokenize_and_align_examples
 # from utils.callbacks_ner_case_punc import WandbProgressResultsCallback
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -294,7 +296,6 @@ def main():
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
     if data_args.train_data_dir is not None or data_args.validation_data_dir is not None or data_args.test_data_dir is not None:
-        from utils.dataset_ner_case_punc import load_data_files, tokenize_and_align_examples
         load_data_files_ = partial(
             load_data_files,
             task_config=data_args.task_config,
@@ -398,6 +399,7 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
+        # num_hidden_layers=4,
     )
 
     tokenizer_name_or_path = model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path
@@ -532,7 +534,8 @@ def main():
         train_dataset = raw_datasets["train"]
         if data_args.max_train_samples is not None:
             max_train_samples = min(len(train_dataset), data_args.max_train_samples)
-            train_dataset = train_dataset.select(range(max_train_samples))
+            # train_dataset = train_dataset.select(range(max_train_samples))
+            train_dataset = train_dataset.shuffle(seed=training_args.seed).select(range(max_train_samples))
         with training_args.main_process_first(desc="train dataset map pre-processing"):
             # train_dataset = train_dataset.map(
             #     tokenize_and_align_labels,
@@ -550,6 +553,34 @@ def main():
                 remove_columns=train_dataset.column_names,
                 desc="Running tokenizer on train dataset",
             )
+
+            # debug
+            logger.info(train_dataset)
+            logger.info(train_dataset[0])
+
+            """
+            # todo: count by example then add
+            # def count_labels(batch):
+            #     Counter(batch["punc_labels"])
+
+            # def extract_all_labels(batch):
+            #     all_labels_punc = [label for labels in batch["punc_labels"] for label in labels]
+            #     return {"all_labels_punc": all_labels_punc}
+
+            # all_labels = train_dataset.map(
+            #     extract_all_labels,
+            #     batched=True,
+            #     batch_size=-1,
+            #     # keep_in_memory=True,
+            #     remove_columns=train_dataset.column_names,
+            #     desc="Counting labels",
+            # )
+
+            # c = Counter(all_labels["all_labels_punc"])
+            # num_samples_punc = [b for a, b in sorted(c.items(), key=lambda x: int(x[0])) if a != -100]
+            # model.num_samples_punc = np.array(num_samples_punc)
+            # logger.info(model.num_samples_punc)
+            """
 
     if training_args.do_eval:
         if "validation" not in raw_datasets:
@@ -615,7 +646,7 @@ def main():
 
         output = {}
         for idx, (label_name, label_list) in enumerate(label_lists_by_choice.items()):
-            # Remove ignored index (special tokens)
+            # Remove ignored tokens
             true_predictions = [
                 [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
                 for prediction, label in zip(predictions[idx], labels[idx])
@@ -644,15 +675,27 @@ def main():
             #         "accuracy": results["overall_accuracy"],
             #     }
 
+            # flatten
             true_labels = [true_l_ for true_labels_ in true_labels for true_l_ in true_labels_]
             true_predictions = [true_p_ for true_preds in true_predictions for true_p_ in true_preds]
-            precision_, recall_, fscore_, _ = precision_recall_fscore_support(true_labels, true_predictions, average='weighted')
-            accuracy_ = accuracy_score(true_labels, true_predictions)
 
-            output[f"{label_name}_precision"] = precision_
-            output[f"{label_name}_recall"] = recall_
-            output[f"{label_name}_f1"] = fscore_
-            output[f"{label_name}_accuracy"] = accuracy_
+            # overall metrics
+            # precision_, recall_, fscore_, _ = precision_recall_fscore_support(true_labels, true_predictions, average="weighted")
+            # accuracy_ = accuracy_score(true_labels, true_predictions)
+
+            # output[f"{label_name}_precision"] = precision_
+            # output[f"{label_name}_recall"] = recall_
+            # output[f"{label_name}_f1"] = fscore_
+            # output[f"{label_name}_accuracy"] = accuracy_
+
+            # metrics per label
+            precisions_, recalls_, fscores_, num_true_labels = precision_recall_fscore_support(true_labels, true_predictions, labels=label_list)
+
+            for idx, label in enumerate(label_list):
+                output[f"{label_name}_{label.lower()}_precision"] = precisions_[idx]
+                output[f"{label_name}_{label.lower()}_recall"] = recalls_[idx]
+                output[f"{label_name}_{label.lower()}_f1"] = fscores_[idx]
+                output[f"num_{label_name}_{label.lower()}"] = num_true_labels[idx]
 
         return output
 
@@ -729,7 +772,7 @@ def main():
         trainer.save_metrics("predict", metrics)
 
         for idx, (label_name, label_list) in enumerate(label_lists_by_choice.items()):
-            # Remove ignored index (special tokens)
+            # Remove ignored index
             true_predictions = [
                 [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
                 for prediction, label in zip(predictions[idx], labels[idx])
@@ -742,7 +785,7 @@ def main():
                     for prediction in true_predictions:
                         writer.write(" ".join(prediction) + "\n")
 
-            # Remove ignored index (special tokens)
+            # Remove ignored index
             true_labels = [
                 [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
                 for prediction, label in zip(predictions[idx], labels[idx])
