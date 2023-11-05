@@ -41,7 +41,7 @@ model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_wit
 #     --return_timestamps "word" \
 #     --return_nbest
 
-# ./infer_wav2vec2.py \
+# ./infer_wav2vec2_old.py \
 #     --model_name_or_path $model_name_or_path \
 #     --input_file_path "/projects/corpus/voice/zaion/lfm/weak_supervised_momo/raw/oct_dec_head5.tsv" \
 #     --prediction_file "/projects/corpus/voice/zaion/lfm/weak_supervised_momo/oct_dec_head5_text.tsv" \
@@ -55,10 +55,22 @@ model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_wit
 #     --chunk_length_s 30 \
 #     --stride_length_s 5
 
-# ./infer_wav2vec2.py \
+# ./infer_wav2vec2_old.py \
 #     --model_name_or_path $model_name_or_path \
 #     --input_file_path "/projects/ilaaridh/weakAnnotation/data/dec_14_25/data.tsv" \
 #     --prediction_file "/projects/ilaaridh/weakAnnotation/data/dec_14_25/data_wav2vec.tsv" \
+#     --sampling_rate 8000 \
+#     --audio_column_name "wav" \
+#     --start_column_name "start" \
+#     --end_column_name "end" \
+#     --preprocessing_num_workers 4 \
+#     --num_workers 1 \
+#     --batch_size 16
+
+# ./infer_wav2vec2_old.py \
+#     --model_name_or_path $model_name_or_path \
+#     --input_file_path "/projects/corpus/voice/zaion/edenred/2023-05-10/data.tsv" \
+#     --prediction_file "/projects/corpus/voice/zaion/edenred/2023-05-10/data_wav2vec_fp32_oldscript.tsv" \
 #     --sampling_rate 8000 \
 #     --audio_column_name "wav" \
 #     --start_column_name "start" \
@@ -78,8 +90,8 @@ model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_wit
 #     --start_column_name "start" \
 #     --end_column_name "end" \
 #     --text_column_name "text" \
-#     --greedy true \
-#     --fp16 true \
+#     --greedy True \
+#     --fp16 True \
 #     --dataloader_num_workers 4 \
 #     --batch_size 16
 
@@ -93,8 +105,8 @@ model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_wit
 #     --start_column_name "start" \
 #     --end_column_name "end" \
 #     --text_column_name "text" \
-#     --greedy true \
-#     --fp16 true \
+#     --greedy True \
+#     --fp16 True \
 #     --dataloader_num_workers 4 \
 #     --batch_size 16
 
@@ -102,13 +114,27 @@ model_name_or_path="outputs/hmhm_merged_and_raw/wav2vec2-FR-7K-large_ft_ep30_wit
 ./infer_wav2vec2.py \
     --model_name_or_path $model_name_or_path \
     --input_file_path "/projects/corpus/voice/zaion/edenred/2023-05-10/data.tsv" \
-    --output_file_path "/projects/corpus/voice/zaion/edenred/2023-05-10/data_wav2vec.tsv" \
+    --output_file_path "/projects/corpus/voice/zaion/edenred/2023-05-10/data_wav2vec_fp32.tsv" \
     --id_column_name "ID" \
     --audio_column_name "wav" \
     --start_column_name "start" \
     --end_column_name "end" \
     --text_column_name "text" \
-    --greedy false \
-    --fp16 true \
+    --greedy False \
+    --fp16 False \
+    --dataloader_num_workers 4 \
+    --batch_size 4
+
+./infer_wav2vec2.py \
+    --model_name_or_path $model_name_or_path \
+    --input_file_path "/projects/corpus/voice/zaion/edenred/2023-05-10/data.tsv" \
+    --output_file_path "/projects/corpus/voice/zaion/edenred/2023-05-10/data_wav2vec_fp16.tsv" \
+    --id_column_name "ID" \
+    --audio_column_name "wav" \
+    --start_column_name "start" \
+    --end_column_name "end" \
+    --text_column_name "text" \
+    --greedy False \
+    --fp16 True \
     --dataloader_num_workers 4 \
     --batch_size 16

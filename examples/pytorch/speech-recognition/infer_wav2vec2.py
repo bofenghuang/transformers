@@ -183,6 +183,7 @@ def main(
     end_column_name: str = "end",
     text_column_name: str = "text",
 ):
+    print(f"Inference arguments: {json.dumps(locals(), indent=4, ensure_ascii=False)}")
 
     df_data = pd.read_csv(input_file_path, sep="\t")
     # print(df_data.head())
