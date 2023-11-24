@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 from typing import Dict
 
-import datasets
+import json
+import time
 import torch
 import torchaudio
 import torchaudio.sox_effects as ta_sox
@@ -27,13 +28,13 @@ from transformers.pipelines.pt_utils import KeyDataset
 
 # NB
 # from utils.normalize_french import FrenchTextNormalizer
-from utils.normalize_french_zaion import FrenchTextNormalizer
+# from utils.normalize_french_zaion import FrenchTextNormalizer
 
 
-text_normalizer = FrenchTextNormalizer()
+# text_normalizer = FrenchTextNormalizer()
 
-sys.path.append("/home/bhuang/my-scripts")
-from myscripts.data.text.wer.compute_wer import compute_wer
+# sys.path.append("/home/bhuang/my-scripts")
+# from myscripts.data.text.wer.compute_wer import compute_wer
 
 
 def log_results(result: Dataset, args: Dict[str, str]):
@@ -44,7 +45,6 @@ def log_results(result: Dataset, args: Dict[str, str]):
     def _log_results(result: Dataset, target_file, pred_file):
         # log all results in text file. Possibly interesting for analysis
         with open(pred_file, "w") as p, open(target_file, "w") as t:
-
             # mapping function to write output
             # def write_to_file(batch, i):
             #     p.write(f"{i}" + "\n")
@@ -65,10 +65,11 @@ def log_results(result: Dataset, args: Dict[str, str]):
         if not os.path.exists(args.outdir):
             os.makedirs(args.outdir)
 
-        _log_results(result, target_file=f"{args.outdir}/log_targets_raw.txt", pred_file=f"{args.outdir}/log_predictions_raw.txt")
+        _log_results(
+            result, target_file=f"{args.outdir}/log_targets_raw.txt", pred_file=f"{args.outdir}/log_predictions_raw.txt"
+        )
 
     def map_norm(example):
-
         def norm_func(s):
             # NB
             return text_normalizer(
@@ -93,12 +94,11 @@ def log_results(result: Dataset, args: Dict[str, str]):
     cer_result = cer_metric.compute(references=result["target"], predictions=result["prediction"])
 
     # print & log results
-    result_str = f"WER: {wer_result}\n" f"CER: {cer_result}"
+    result_str = f"WER: {wer_result}\nCER: {cer_result}"
     print(result_str)
 
     # log all results in text file. Possibly interesting for analysis
     if log_outputs is not None:
-
         # with open(f"{args.outdir}/{dataset_id}_eval_results.txt", "w") as f:
         with open(f"{args.outdir}/eval_results.txt", "w") as f:
             f.write(result_str)
@@ -133,161 +133,98 @@ def eval_results(result: Dataset, args: Dict[str, str], do_ignore_words=False):
 
 def main(args):
     # load dataset
-    if args.test_csv_file is not None:
-        dataset = load_dataset("csv", data_files=args.test_csv_file)["train"]
+    if args.input_file_path is not None:
+        ext = args.input_file_path.rsplit(".", 1)[-1]
+        dataset = load_dataset(ext, data_files=args.input_file_path, split="train")
     elif args.dataset is not None:
         dataset = load_dataset(args.dataset, args.config, split=args.split, use_auth_token=True)
     else:
         raise ValueError("You have not specified a dataset name nor a custom validation file")
 
-    # Debug: only process the first two examples as a test
-    # dataset = dataset.select(range(10))
+    print(dataset)
 
-    # NB: when got some real word "nan" in csv file (dekuple)
-    def correct_text(example):
-        example[args.text_column_name] = (
-            example[args.text_column_name] if example[args.text_column_name] is not None else "nan"
-        )
-        return example
+    # Debug
+    # dataset = dataset.select(range(1000))
 
-    dataset = dataset.map(correct_text, num_proc=args.preprocessing_num_workers, desc="Correct readed text")
-    # dataset = dataset.sort(args.length_column_name)
-    # print(dataset["wrd"][:100])
-    # print(None in dataset["wrd"])
-    # quit()
-
-    if args.test_csv_file is not None:
-        # read audio segments by timestamps
-        sr = 8_000
-
-        def read_segments(example):
-            start = int(example[args.start_column_name] * sr)
-            end = int(example[args.end_column_name] * sr)
-            num_frames = end - start
-
-            waveform, sample_rate = torchaudio.load(example[args.audio_column_name], frame_offset=start, num_frames=num_frames)
-            # ! read full wavs
-            # waveform, _ = torchaudio.load(example[args.audio_column_name], frame_offset=0, num_frames=-1)
-
-            # bh: normalize wav before computing fbanks
-            # effects = []
-            # # normalize
-            # effects.append(["gain", "-n"])
-            # # sampling
-            # # effects.append(["rate", f"{to_sample_rate}"])
-            # # to mono
-            # # effects.append(["channels", "1"])
-            # converted_waveform, converted_sample_rate = ta_sox.apply_effects_tensor(
-            #     waveform, sample_rate, effects
-            # )
-            # converted_waveform = converted_waveform.squeeze(axis=0)  # mono
-
-            converted_waveform = waveform.squeeze(axis=0)  # mono
-            converted_sample_rate = sample_rate
-
-            example[args.audio_column_name] = {
-                "path": example[args.audio_column_name],
-                "array": converted_waveform.numpy(),
-                # "array": waveform,
-                "sampling_rate": converted_sample_rate,
-            }
-
-            return example
-
-        # """
-        dataset = dataset.map(read_segments, num_proc=args.preprocessing_num_workers, desc="read audio segments by timestamps")
-        dataset = dataset.cast_column(args.audio_column_name, datasets.features.Audio(sampling_rate=sr))
-        print(dataset[0])
-        print(dataset[0][args.audio_column_name])
-        print(dataset[0][args.audio_column_name]["array"].shape)
-        # dataset.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_test/dump_readed")
-        # """
-        # dataset = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_test/dump_readed")
-
-        # bh: whisper doesn't take segments longer than 30s
-        # todo: max 448 tokens
-        max_input_length = 30 * 16_000
-        min_input_length = 1 * 16_000
-
-        def is_audio_in_length_range(example):
-            length = example[args.audio_column_name]["array"].shape[0]
-            # return length > min_input_length and length < max_input_length
-            return length < max_input_length
-
-        print(dataset)
-        dataset = dataset.filter(is_audio_in_length_range, num_proc=args.preprocessing_num_workers)
-        print(dataset)
-        # dataset.save_to_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_test/dump_readed_max30s")
-        # dataset = datasets.load_from_disk("/projects/bhuang/.cache/hf_outputs/asr/hmhm_test/dump_readed_max30s")
+    device = "cuda:0" if torch.cuda.is_available() and args.fp16 else "cpu"
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
     # load processor
-    # bh: set prefix tokens for tokenizer
-    # processor = AutoProcessor.from_pretrained(args.model_id, language="french", task="transcribe")
+    # set prefix tokens for tokenizer
     processor = AutoProcessor.from_pretrained(args.model_id, language=args.language, task=args.task)
     model_sampling_rate = processor.feature_extractor.sampling_rate
+
+    # tmp fix
+    dataset = dataset.map(
+        lambda x: {f"tmp_{args.audio_column_name}": x[args.audio_column_name]}, num_proc=args.preprocessing_num_workers, keep_in_memory=True
+    )
 
     # resample audio
     dataset = dataset.cast_column(args.audio_column_name, Audio(sampling_rate=model_sampling_rate))
 
-    if args.device is None:
-        args.device = 0 if torch.cuda.is_available() else -1
+    # whisper doesn't take segments longer than 30s
+    # todo: max 448 tokens
+    max_input_length = 30 * model_sampling_rate
+    # min_input_length = 1 * model_sampling_rate
 
-    # model = AutoModelForSpeechSeq2Seq.from_pretrained(args.model_id)
-    # model = AutoModelForSpeechSeq2Seq.from_pretrained(args.model_id, torch_dtype=torch.float16)
-    model_args = {}
-    if args.fp16:
-        model_args["torch_dtype"] = torch.float16
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(args.model_id, **model_args)
+    def is_audio_in_length_range(example):
+        length = example[args.audio_column_name]["array"].shape[0]
+        # return length > min_input_length and length < max_input_length
+        return length < max_input_length
+
+    # dataset = dataset.filter(is_audio_in_length_range, num_proc=args.preprocessing_num_workers, keep_in_memory=True)
+    # print(f"Filtered to {dataset.num_rows:,d} utterances")
+
+    # if args.device is None:
+    #     args.device = 0 if torch.cuda.is_available() else -1
+
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        args.model_id,
+        device_map=device,
+        torch_dtype=torch_dtype,
+        low_cpu_mem_usage=True,
+        # use_safetensors=True,
+        # use_flash_attention_2=True,
+    )
     model.eval()
-    model = model.to(args.device)
+    # model = model.to(args.device)
+    print("Model has been loaded")
 
-    # bh: force prefix tokens for generation utils
-    # model.config.forced_decoder_ids = processor.get_decoder_prompt_ids(language="fr", task="transcribe")
+    # Activate Torch Scale-Product-Attention (SDPA)
+    # Nice to have when GPU doesn't support Flash-Attention
+    model = model.to_bettertransformer()
+
+    # force prefix tokens for generation utils
     model.config.forced_decoder_ids = processor.get_decoder_prompt_ids(language=args.language, task=args.task)
-    print(f"Model `forced_decoder_ids`: {model.config.forced_decoder_ids}")
+    print(f"Model forced_decoder_ids: {model.config.forced_decoder_ids}")
     # todo: include some other tokens dropped by fine-tuning
     # tmp_config = AutoConfig.from_pretrained("openai/whisper-medium")
     # model.config.suppress_tokens = tmp_config.suppress_tokens
     # print(f"Model `suppress_tokens`: {model.config.suppress_tokens}")
 
-    # todo: test new pipeline
-    # asr = pipeline("automatic-speech-recognition", model=args.model_id, device=args.device)
-    # asr = pipeline(
-    #     "automatic-speech-recognition",
-    #     config=config,
-    #     model=model,
-    #     tokenizer=tokenizer,
-    #     feature_extractor=feature_extractor,
-    #     decoder=decoder,
-    #     device=args.device,
-    # )
-
-    # bh: inference one by one
-    """
-    # map function to decode audio
-    def map_to_pred(batch):
-        # prediction = asr(batch["audio"]["array"], chunk_length_s=args.chunk_length_s, stride_length_s=args.stride_length_s)
-        # prediction = asr(batch[args.audio_column_name]["array"], chunk_length_s=args.chunk_length_s, stride_length_s=args.stride_length_s)
+    # inference using pipeline (pros: embedded dataloader)
+    # """
+    # asr = pipeline("automatic-speech-recognition", model=args.model_id, device=args.device, **model_args)
+    asr = pipeline(
+        "automatic-speech-recognition",
+        model=model,
+        feature_extractor=processor.feature_extractor,
+        tokenizer=processor.tokenizer,
         # todo
-        prediction = asr(batch[args.audio_column_name]["array"])
+        # max_new_tokens=128,
+        # todo
+        # chunk_length_s=args.chunk_length_s,
+        # stride_length_s=args.stride_length_s,
+        # num_workers=args.num_workers,
+        # batch_size=args.batch_size,
+        torch_dtype=torch_dtype,
+        # device=args.device,
+    )
 
-        # batch["prediction"] = prediction["text"]
-        batch["prediction"] = text_normalizer(prediction["text"])
-
-        # batch["target"] = normalize_text(batch[args.text_column_name], invalid_chars_regex)
-        batch["target"] = batch[args.text_column_name]
-        return batch
-
-    # run inference on all examples
-    # result = dataset.map(map_to_pred, remove_columns=dataset.column_names)
-    # bh: keep ID for tracking
-    result = dataset.map(map_to_pred)
-    """
-
-    # bh: inference by batch
-    """
     # desceding order to early check if OOM
-    # dataset = dataset.sort(args.length_column_name, reverse=True)
+    dataset = dataset.sort(args.length_column_name, reverse=True, keep_in_memory=True)
+
+    start_time = time.perf_counter()
 
     predictions = []
     for out in tqdm(
@@ -305,17 +242,19 @@ def main(args):
         # print(out)
         predictions.append(out["text"])
 
+    print(f"Generation completed in {time.strftime('%Hh%Mm%Ss', time.gmtime(time.perf_counter() - start_time))}.")
+
     def collect_result(example, idx):
         example["prediction"] = predictions[idx]
-        example["target"] = normalize_text(example[args.text_column_name], invalid_chars_regex)
+        # example["target"] = normalize_text(example[args.text_column_name], invalid_chars_regex)
         return example
 
     # result = dataset.map(collect_result, remove_columns=dataset.column_names, with_indices=True)
-    result = dataset.map(collect_result, with_indices=True)
-    """
-
-    # bh: inference by batch with low APIs
+    result = dataset.map(collect_result, with_indices=True, keep_in_memory=True)
     # """
+
+    # bh: inference by batch with low-level APIs
+    """
     gen_greedy = {"do_sample": False, "num_beams": 1}
     gen_greedy_sampling = {"do_sample": True, "num_beams": 1}
     # While nucleus sampling can generate text free of repetitions, the semantic coherence of the generated text is not well-maintained.
@@ -347,7 +286,9 @@ def main(args):
     def map_to_pred(batch):
         # bh: synchronised process and forward, this can be improved by dataloader
         inputs = processor(
-            [example["array"] for example in batch[args.audio_column_name]], sampling_rate=16_000, return_tensors="pt"
+            [example["array"] for example in batch[args.audio_column_name]],
+            sampling_rate=model_sampling_rate,
+            return_tensors="pt",
         )
         input_features = inputs.input_features
         input_features = input_features.to(args.device)
@@ -362,36 +303,50 @@ def main(args):
         # normalize prediction
         # batch["prediction"] = [norm_func(prediction) for prediction in transcriptions]
 
-        batch["target"] = batch[args.text_column_name]
+        # batch["target"] = batch[args.text_column_name]
         # normalize target
         # batch["target"] = [norm_func(target) for target in batch[args.text_column_name]]
 
         return batch
 
-    result = dataset.map(map_to_pred, batched=True, batch_size=args.batch_size)
-    # """
+    result = dataset.map(map_to_pred, batched=True, batch_size=args.batch_size, keep_in_memory=True)
+    """
+
+    os.makedirs(os.path.dirname(args.output_file_path), exist_ok=True)
+
+    with open(args.output_file_path, "w") as manifest_f:
+        for _, sample in enumerate(tqdm(result, desc="Saving", total=result.num_rows, unit=" samples")):
+            # tmp fix
+            # sample[args.audio_column_name] = sample.pop(args.audio_column_name)["path"]
+            sample[args.audio_column_name] = sample.pop(f"tmp_{args.audio_column_name}")
+            manifest_f.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
 
     # bh: fake ID if not exists
-    if args.id_column_name not in result.features.keys():
-        result = result.map(lambda example, idx: {**example, args.id_column_name: f"{idx:09d}"}, with_indices=True)
+    # if args.id_column_name not in result.features.keys():
+    #     result = result.map(lambda example, idx: {**example, args.id_column_name: f"{idx:09d}"}, with_indices=True)
 
     # filtering out empty targets
     # result = result.filter(lambda example: example["target"] != "")
 
     # compute and log_results
     # do not change function below
-    log_results(result, args)
+    # todo
+    # log_results(result, args)
 
     # speechbrain's WER computation util
-    eval_results(result, args, do_ignore_words=False)
-    eval_results(result, args, do_ignore_words=True)
+    # todo
+    # eval_results(result, args, do_ignore_words=False)
+    # eval_results(result, args, do_ignore_words=True)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--model_id", type=str, required=True, help="Model identifier. Should be loadable with 🤗 Transformers")
-    parser.add_argument("--test_csv_file", type=str, default=None, help="test csv path")
+    parser.add_argument(
+        "--model_id", type=str, required=True, help="Model identifier. Should be loadable with 🤗 Transformers"
+    )
+    parser.add_argument("--input_file_path", type=str, default=None, help="Path to input test file")
+    parser.add_argument("--output_file_path", type=str, default=None, help="Path to save results")
     parser.add_argument(
         "--dataset",
         type=str,
@@ -430,7 +385,7 @@ if __name__ == "__main__":
         default=None,
         help="The device to run the pipeline on. -1 for CPU (default), 0 for the first GPU and so on.",
     )
-    parser.add_argument("--outdir", type=str, required=True, help="Save path.")
+    # parser.add_argument("--outdir", type=str, required=True, help="Save path.")
     parser.add_argument("--language", type=str, default="french", help="Language token")
     parser.add_argument("--task", type=str, default="transcribe", help="Task token")
     parser.add_argument("--fp16", action="store_true", help="Downcast model and data to fp16")

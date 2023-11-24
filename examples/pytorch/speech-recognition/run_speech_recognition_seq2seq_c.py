@@ -15,6 +15,8 @@
 # limitations under the License.
 """
 Fine-tuning the library models for sequence to sequence speech recognition.
+
+With preprocessing steps (waveform reading, online audio augmentation, feature extraction, tokenization) moved into data collator.
 """
 # You can also adapt this script on your own sequence to sequence speech
 # recognition task. Pointers for this are left as comments.
@@ -26,6 +28,8 @@ import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
+import numpy as np
+import soundfile as sf
 import datasets
 import evaluate
 import torch
@@ -46,6 +50,8 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint, is_main_process
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
+
+from utils.augment_audio import SpeechAugmentator
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -279,6 +285,11 @@ class DataTrainingArguments:
         default="transcribe",
         metadata={"help": "Task, either `transcribe` for speech recognition or `translate` for speech translation."},
     )
+    apply_audio_augmentation: bool = field(default=False, metadata={"help": "Whether or not augment audio on the fly."})
+    background_noise_dir: str = field(default=None, metadata={"help": "Path to folder with sound files."})
+    audio_augmentation_prob: float = field(
+        default=0.2, metadata={"help": "Probability for applying one of audio augmentations."}
+    )
 
 
 @dataclass
@@ -297,11 +308,44 @@ class DataCollatorSpeechSeq2SeqWithPadding:
     processor: Any
     decoder_start_token_id: int
     forward_attention_mask: bool
+    augmentator: Any
+    audio_column_name: str
+    text_column_name: str
+    do_lower_case: bool
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
         # split inputs and labels since they have to be of different lengths and need
         # different padding methods
         model_input_name = self.processor.model_input_names[0]
+
+        for feature in features:
+
+            # read waveform
+            waveform, sample_rate = sf.read(
+                feature[self.audio_column_name], start=0, frames=-1, dtype="float32", always_2d=True
+            )
+            waveform = waveform[:, 0]
+
+            if self.augmentator is not None:
+                # don't know why here is a list but not np array
+                # waveform = np.array(waveform, dtype=np.float32)
+                waveform = self.augmentator(waveform, sample_rate=sample_rate)
+
+            # bh: compute log-Mel input features from input audio array
+            inputs = self.processor.feature_extractor(
+                waveform, sampling_rate=sample_rate, return_attention_mask=self.forward_attention_mask
+            )
+            # bh: different key from others tokenizers
+            feature[model_input_name] = inputs.get(model_input_name)[0]
+            if self.forward_attention_mask:
+                feature["attention_mask"] = inputs.get("attention_mask")[0]
+
+            # process targets
+            # bh: should better do audio augmentation / text normalization before runnign this script
+            input_str = feature[self.text_column_name].lower() if self.do_lower_case else feature[self.text_column_name]
+            # bh: encode target text to label ids
+            feature["labels"] = self.processor.tokenizer(input_str).input_ids
+
         input_features = [{model_input_name: feature[model_input_name]} for feature in features]
         label_features = [{"input_ids": feature["labels"]} for feature in features]
 
@@ -311,7 +355,8 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
         if self.forward_attention_mask:
             # bh: pass attention_mask for specaugment of whisper models
-            batch["attention_mask"] = torch.LongTensor([feature["attention_mask"] for feature in features])
+            # batch["attention_mask"] = torch.LongTensor([feature["attention_mask"] for feature in features])
+            batch["attention_mask"] = torch.LongTensor(np.array([feature["attention_mask"] for feature in features]))
 
         # bh: The labels ids on the other hand are un-padded
         labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
@@ -333,6 +378,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
 
 def main():
+    # def main(args):
     # 1. Parse input arguments
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -345,6 +391,7 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        # model_args, data_args, training_args = parser.parse_args_into_dataclasses(args)
 
     if model_args.use_auth_token is not None:
         warnings.warn(
@@ -413,9 +460,7 @@ def main():
             raw_datasets["train"] = load_dataset(ext, data_files=data_args.train_file, split="train")
             # cast audio file path to Audio
             # todo: sampling_rate
-            raw_datasets["train"] = raw_datasets["train"].cast_column(
-                data_args.audio_column_name, datasets.features.Audio(sampling_rate=16_000)
-            )
+            # raw_datasets["train"] = raw_datasets["train"].cast_column(data_args.audio_column_name, datasets.features.Audio(sampling_rate=16_000))
         elif data_args.dataset_name is not None:
             raw_datasets["train"] = load_dataset(
                 data_args.dataset_name,
@@ -431,9 +476,7 @@ def main():
         if data_args.validation_file is not None:
             ext = data_args.validation_file.rsplit(".", 1)[-1]
             raw_datasets["eval"] = load_dataset(ext, data_files=data_args.validation_file, split="train")
-            raw_datasets["eval"] = raw_datasets["eval"].cast_column(
-                data_args.audio_column_name, datasets.features.Audio(sampling_rate=16_000)
-            )
+            # raw_datasets["eval"] = raw_datasets["eval"].cast_column(data_args.audio_column_name, datasets.features.Audio(sampling_rate=16_000))
         elif data_args.dataset_name is not None:
             raw_datasets["eval"] = load_dataset(
                 data_args.dataset_name,
@@ -542,11 +585,11 @@ def main():
         tokenizer.set_prefix_tokens(language=data_args.language, task=data_args.task)
 
     # 6. Resample speech dataset if necessary
-    dataset_sampling_rate = next(iter(raw_datasets.values())).features[data_args.audio_column_name].sampling_rate
-    if dataset_sampling_rate != feature_extractor.sampling_rate:
-        raw_datasets = raw_datasets.cast_column(
-            data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
-        )
+    # dataset_sampling_rate = next(iter(raw_datasets.values())).features[data_args.audio_column_name].sampling_rate
+    # if dataset_sampling_rate != feature_extractor.sampling_rate:
+    #     raw_datasets = raw_datasets.cast_column(
+    #         data_args.audio_column_name, datasets.features.Audio(sampling_rate=feature_extractor.sampling_rate)
+    #     )
 
     # 7. Preprocessing the datasets.
     # We need to read the audio files as arrays and tokenize the targets.
@@ -570,10 +613,21 @@ def main():
     if data_args.max_eval_samples is not None:
         raw_datasets["eval"] = raw_datasets["eval"].select(range(data_args.max_eval_samples))
 
+    # init speech augmentation utils
+    augmentator = None
+    if data_args.apply_audio_augmentation:
+        augmentator = SpeechAugmentator(
+            background_noise_dir=data_args.background_noise_dir, prob=data_args.audio_augmentation_prob
+        )
+
     def prepare_dataset(batch):
         # process audio
         # bh: load and resample
         sample = batch[audio_column_name]
+
+        batch["array"] = sample["array"]
+        batch["sampling_rate"] = sample["sampling_rate"]
+
         # bh: compute log-Mel input features from input audio array
         inputs = feature_extractor(
             sample["array"], sampling_rate=sample["sampling_rate"], return_attention_mask=forward_attention_mask
@@ -593,14 +647,13 @@ def main():
         batch["labels"] = tokenizer(input_str).input_ids
         return batch
 
-    # """
-    with training_args.main_process_first(desc="dataset map pre-processing"):
-        vectorized_datasets = raw_datasets.map(
-            prepare_dataset,
-            remove_columns=next(iter(raw_datasets.values())).column_names,
-            num_proc=data_args.preprocessing_num_workers,
-            desc="preprocess train dataset",
-        )
+    # with training_args.main_process_first(desc="dataset map pre-processing"):
+    #     vectorized_datasets = raw_datasets.map(
+    #         prepare_dataset,
+    #         remove_columns=next(iter(raw_datasets.values())).column_names,
+    #         num_proc=data_args.preprocessing_num_workers,
+    #         desc="preprocess train dataset",
+    #     )
 
     # logger.info(vectorized_datasets)
 
@@ -609,11 +662,11 @@ def main():
     def is_audio_in_length_range(length):
         return length > min_input_length and length < max_input_length
 
-    vectorized_datasets = vectorized_datasets.filter(
-        is_audio_in_length_range,
-        num_proc=num_workers,
-        input_columns=["input_length"],
-    )
+    # vectorized_datasets = vectorized_datasets.filter(
+    #     is_audio_in_length_range,
+    #     num_proc=num_workers,
+    #     input_columns=["input_length"],
+    # )
     # logger.info(vectorized_datasets)
 
     # bh: limit max_target_positions for whisper
@@ -624,12 +677,15 @@ def main():
         return len(labels) < max_label_length
 
     # todo: do in another preprocess script
-    vectorized_datasets = vectorized_datasets.filter(
-        is_labels_in_length_range,
-        num_proc=num_workers,
-        input_columns=["labels"],
-    )
-    logger.info(vectorized_datasets)
+    # vectorized_datasets = vectorized_datasets.filter(
+    #     is_labels_in_length_range,
+    #     num_proc=num_workers,
+    #     input_columns=["labels"],
+    # )
+    # logger.info(vectorized_datasets)
+
+    # bh: all preprocessing will be done in data collator
+    vectorized_datasets = raw_datasets
 
     # for large datasets it is advised to run the preprocessing on a
     # single machine first with `args.preprocessing_only` since there will mostly likely
@@ -671,11 +727,20 @@ def main():
 
     processor = AutoProcessor.from_pretrained(training_args.output_dir)
 
+    if data_args.language is not None:
+        # bh: set after intialize
+        # We only need to set the task id when the language is specified (i.e. in a multilingual setting)
+        processor.tokenizer.set_prefix_tokens(language=data_args.language, task=data_args.task)
+
     # 10. Define data collator
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(
         processor=processor,
         decoder_start_token_id=model.config.decoder_start_token_id,
         forward_attention_mask=forward_attention_mask,
+        augmentator=augmentator,
+        audio_column_name=audio_column_name,
+        text_column_name=text_column_name,
+        do_lower_case=do_lower_case,
     )
 
     # 11. Initialize Trainer

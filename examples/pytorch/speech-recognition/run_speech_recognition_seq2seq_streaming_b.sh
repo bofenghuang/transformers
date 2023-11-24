@@ -15,8 +15,8 @@ export WANDB_PROJECT=hf-whisper-v3
 export OMP_NUM_THREADS="1"
 
 # https://github.com/microsoft/DeepSpeed/issues/662
-export CUDA_VISIBLE_DEVICES="1,2,3,4,5"
-# export CUDA_VISIBLE_DEVICES="1"
+# export CUDA_VISIBLE_DEVICES="1,2,4,5"
+export CUDA_VISIBLE_DEVICES="1,5"
 
 # Debugging flags (optional)
 # force crashing on nccl issues like hanging broadcast
@@ -35,31 +35,30 @@ export CUDA_VISIBLE_DEVICES="1,2,3,4,5"
 # model_name_or_path="versae/whisper-large-v3"
 model_name_or_path="openai/whisper-large-v3"
 
-# train_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-07/train_asr_processed_dedup256.json"
-# validation_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-07/valid_asr_mcv13_manifest_normalized_pnc.json"
-# train_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-13/train_asr_processed_dedup256_processed_cleaned.json"
-# validation_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-13/test_asr_mcv13_manifest_normalized_pnc.json"
-train_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-21/train_asr_processed_cleaned.json"
-validation_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-21/test_asr_mcv13_manifest_normalized_pnc.json"
+train_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-07/train_asr_processed_dedup256_shuffled.json"
+validation_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-07/valid_asr_mcv13_manifest_normalized_pnc.json"
 
-run_name="whisper-large-v3-ft-french-pnc-ep8-bs280-lr4e6-wd001-audioaug-specaug-betterdata"
+run_name="whisper-large-v3-ft-french-lr4e6-bs256-streaming"
 output_dir="./outputs/hf_whisper/$run_name"
 
 # --gradient_checkpointing \ vs use_cache
 # --ddp_find_unused_parameters="True" \ and layerdrop, but can't do --gradient_checkpointing
 
+    # --adam_beta2 "0.98" \
+    # --weight_decay "0.01" \
+    # --num_train_epochs "2" \
+    # --dataloader_num_workers "4" \
+    # --max_steps "10319" \
+    # --dataloader_num_workers "1" \
+
     # --ddp_timeout 36000 \
 
-    # --adam_beta2 "0.98" \
-    # --adam_beta2 "0.95" \
-    # --weight_decay "0.01" \
-    # todo: ep, wd
-
-# accelerate but
-    # --group_by_length \
+# RuntimeError: Sizes of tensors must match except in dimension 0. Expected size 18 but got size 19 for tensor number 1 in the list.
+# https://github.com/huggingface/transformers/issues/24999
+    # --dispatch_batches false \
 
 # python \
-#     run_speech_recognition_seq2seq_b.py \
+#     run_speech_recognition_seq2seq_streaming_b.py \
 
 # deepspeed \
 #     --master_port 29001 \
@@ -68,46 +67,38 @@ output_dir="./outputs/hf_whisper/$run_name"
 #     --deepspeed ds_config_zero2_no_offload.json \
 
 torchrun \
-    --master_port 29001 \
-    --nproc_per_node 5 \
-    run_speech_recognition_seq2seq_c.py \
+    --nnodes 1 \
+    --nproc_per_node 2 \
+    --rdzv_backend c10d \
+    --rdzv_endpoint localhost:6000 \
+    --max_restarts 0 \
+    run_speech_recognition_seq2seq_streaming_b.py \
     --deepspeed ds_config_zero2_no_offload.json \
     --model_name_or_path $model_name_or_path \
     --use_auth_token \
+    --apply_spec_augment \
     --train_file $train_file \
     --validation_file $validation_file \
     --audio_column_name "audio_filepath" \
+    --streaming \
+    --num_shards "16" \
     --max_duration_in_seconds "30" \
-    --apply_audio_augmentation false \
-    --background_noise_dir "/home/bhuang/corpus/speech/public/musan_wo_speech" \
-    --audio_augmentation_prob "0.2" \
-    --apply_spec_augment \
-    --mask_time_prob "0.05" \
-    --mask_time_length "10" \
-    --mask_feature_prob "0.05" \
-    --mask_feature_length "10" \
     --do_lower_case false \
-    --remove_unused_columns false \
+    --do_normalize_eval false \
     --language "french" \
     --task "transcribe" \
-    --preprocessing_num_workers "16" \
-    --dataloader_num_workers "5" \
+    --dataloader_num_workers "4" \
     --output_dir $output_dir \
     --overwrite_output_dir \
     --run_name $run_name \
-    --num_train_epochs "8" \
-    --per_device_train_batch_size "56" \
-    --per_device_eval_batch_size "28" \
-    --gradient_accumulation_steps "1" \
+    --max_steps "10319" \
+    --per_device_train_batch_size "32" \
+    --per_device_eval_batch_size "16" \
+    --gradient_accumulation_steps "4" \
     --optim "adamw_bnb_8bit" \
+    --adam_beta2 "0.98" \
     --learning_rate "4.375e-6" \
     --warmup_ratio "0.05" \
-    --lr_scheduler_type "cosine" \
-    --weight_decay "0.01" \
-    --fp16 \
-    --gradient_checkpointing \
-    --use_cache false \
-    --freeze_feature_encoder false \
     --logging_steps "10" \
     --evaluation_strategy "steps" \
     --eval_steps "500" \
@@ -117,7 +108,12 @@ torchrun \
     --metric_for_best_model "wer" \
     --greater_is_better false \
     --load_best_model_at_end \
+    --freeze_feature_encoder false \
+    --fp16 \
+    --use_cache false \
+    --gradient_checkpointing \
     --predict_with_generate \
     --generation_num_beams "1" \
+    --generation_max_length="225" \
     --do_train \
     --do_eval
