@@ -2,6 +2,7 @@
 # coding=utf-8
 # Copyright 2023  Bofeng Huang
 
+"""Infer whisper models with HF streaming dataset and accelerate for distributed settings (not working together yet)."""
 
 import copy
 import json
@@ -162,7 +163,7 @@ def main(
     start_column_name: str = "start",
     duration_column_name: str = "duration",
     text_column_name: str = "text",
-    max_label_length: Optional[str] = 128,
+    # max_label_length: Optional[str] = 128,
     sort_by_length: bool = False,
     torch_dtype: str = "float16",
     attn_type: Optional[str] = "flash_attn",
@@ -185,16 +186,13 @@ def main(
         )
 
     if torch_dtype == "float16":
-        mixed_precision = "fp16"
         torch_dtype = torch.float16
     elif torch_dtype == "bfloat16":
-        mixed_precision = "bf16"
         torch_dtype = torch.bfloat16
     else:
-        mixed_precision = "no"
         torch_dtype = torch.float32
 
-    accelerator = Accelerator(mixed_precision=mixed_precision)
+    accelerator = Accelerator()
 
     # load dataset
     if dataset_file is not None:
@@ -211,19 +209,20 @@ def main(
     else:
         raise ValueError("You have not specified a dataset name nor a custom validation file")
 
-    if id_column_name not in dataset.features:
+    dataset_features = list(dataset.features.keys())
+
+    if id_column_name not in dataset_features:
         dataset = dataset.map(
             lambda _, idx: {id_column_name: f"{idx:09d}"}, with_indices=True, num_proc=num_processing_workers
         )
 
     # Debug
-    # dataset = dataset.select(range(20))
+    # dataset = dataset.select(range(100))
+
+    result = copy.deepcopy(dataset)
 
     # sort to accelerate
     dataset = dataset.sort(duration_column_name, reverse=True) if sort_by_length else dataset
-
-    # convert to df
-    result = copy.deepcopy(dataset)
 
     # dataset = dataset.to_iterable_dataset(num_shards=data_args.num_shards)  # shard the dataset
     dataset = dataset.to_iterable_dataset()
@@ -263,12 +262,12 @@ def main(
 
     # read segments
     def get_segment(example):
-        sr_ = sf.info(sample[audio_column_name]).samplerate
-        start = int(float(sample[start_column_name]) * sr_)
-        frames = int(float(sample[duration_column_name]) * sr_)
+        sr_ = sf.info(example[audio_column_name]).samplerate
+        start = int(float(example[start_column_name]) * sr_)
+        frames = int(float(example[duration_column_name]) * sr_)
 
         waveform, _ = get_waveform(
-            sample[audio_column_name],
+            example[audio_column_name],
             start=start,
             frames=frames,
             mono=True,
@@ -284,12 +283,12 @@ def main(
 
         return example
 
-    if start_column_name in dataset.features and duration_column_name in dataset.features:
+    if start_column_name in dataset_features and duration_column_name in dataset_features:
         dataset = dataset.map(get_segment)
+    else:
+        dataset = dataset.cast_column(audio_column_name, Audio(sampling_rate=model_sampling_rate))
 
-    dataset = dataset.cast_column(audio_column_name, Audio(sampling_rate=model_sampling_rate))
-
-    max_label_length = max_label_length if max_label_length is not None else model.config.max_length
+    # max_label_length = max_label_length if max_label_length is not None else model.config.max_length
     model_input_name = feature_extractor.model_input_names[0]
 
     def prepare_dataset(batch):
@@ -308,7 +307,6 @@ def main(
 
         return batch
 
-    dataset_features = list(dataset.features.keys())
     vectorized_dataset = dataset.map(prepare_dataset, remove_columns=dataset_features)
 
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(
@@ -350,7 +348,7 @@ def main(
 
     eval_loader = accelerator.prepare(eval_loader)
     total_steps = int(result.num_rows / per_device_eval_batch_size / accelerator.num_processes)
-    batches = tqdm(eval_loader, total=total_steps, desc="Evaluating...", disable=not accelerator.is_local_main_process)
+    batches = tqdm(eval_loader, total=total_steps, desc="Inferring...", disable=not accelerator.is_local_main_process)
 
     for step, batch in enumerate(batches):
         utt_ids = batch.pop("utt_ids")
@@ -373,7 +371,15 @@ def main(
         #     jsonl_dump(data, output_file_path, mode="a")
 
     accelerator.wait_for_everyone()
-    print(f'Inference time: {time.strftime("%Hh%Mm%Ss", time.gmtime(time.perf_counter() - start_time))}')
+    # accelerator.print(f'Inference time: {time.strftime("%dd%Hh%Mm%Ss", time.gmtime(time.perf_counter() - start_time))}')
+
+    elapsed_time = time.perf_counter() - start_time
+    hours, rem = divmod(elapsed_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    accelerator.print(f"Inference time: {hours:.0f}h {minutes:.0f}m {seconds:.2f}s")
+
+    accelerator.free_memory()
+    del model
 
     id_pred_mappings = dict(zip(eval_ids, eval_preds))
 
@@ -390,14 +396,18 @@ def main(
 
         return example
 
-    result = result.map(process_function, num_proc=num_processing_workers)
-    result = result.remove_columns(set(result.column_names) - set([id_column_name, text_column_name, "prediction"]))
-    print(result)
+    with accelerator.local_main_process_first():
+        result = result.map(process_function, num_proc=num_processing_workers)
+        # result = result.remove_columns(set(result.column_names) - set([id_column_name, text_column_name, "prediction"]))
 
-    os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
-    with open(output_file_path, "w") as manifest_f:
-        for sample in tqdm(result, desc="Saving", total=result.num_rows, unit=" samples"):
-            manifest_f.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
+    accelerator.print(result)
+
+    if accelerator.is_local_main_process:
+        os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+
+        with open(output_file_path, "w") as manifest_f:
+            for sample in tqdm(result, desc="Saving", total=result.num_rows, unit=" samples"):
+                manifest_f.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
 
     accelerator.end_training()
 

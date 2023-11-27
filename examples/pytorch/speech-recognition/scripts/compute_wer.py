@@ -108,6 +108,7 @@ def main(
     # write_dataset_to_json(dataset, output_file_path)
     # print(f"The processed data is saved into {output_file_path}")
 
+    # filtering out empty targets
     dataset = dataset.filter(
         lambda x: len(x) > 0, input_columns=f"normalized_{target_column_name}", num_proc=num_processing_workers
     )
