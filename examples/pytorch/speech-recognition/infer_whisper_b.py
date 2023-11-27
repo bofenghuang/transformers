@@ -2,7 +2,7 @@
 # coding=utf-8
 # Copyright 2023  Bofeng Huang
 
-"""Infer whisper models with HF streaming dataset and accelerate for distributed settings (not working together yet)."""
+"""Infer whisper models with HF streaming dataset and HF accelerate for distributed settings (not working together yet)."""
 
 import copy
 import json
@@ -10,10 +10,10 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
-import soundfile as sf
 
 import fire
 import numpy as np
+import soundfile as sf
 import torch
 from accelerate import Accelerator
 from datasets import Audio, load_dataset
@@ -212,9 +212,10 @@ def main(
     dataset_features = list(dataset.features.keys())
 
     if id_column_name not in dataset_features:
-        dataset = dataset.map(
-            lambda _, idx: {id_column_name: f"{idx:09d}"}, with_indices=True, num_proc=num_processing_workers
-        )
+        with accelerator.local_main_process_first():
+            dataset = dataset.map(
+                lambda _, idx: {id_column_name: f"{idx:09d}"}, with_indices=True, num_proc=num_processing_workers
+            )
 
     # Debug
     # dataset = dataset.select(range(100))
@@ -259,6 +260,8 @@ def main(
     # tmp_config = AutoConfig.from_pretrained("openai/whisper-medium")
     # model.config.suppress_tokens = tmp_config.suppress_tokens
     # print(f"Model `suppress_tokens`: {model.config.suppress_tokens}")
+
+    accelerator.print("Whisper model has been loaded")
 
     # read segments
     def get_segment(example):
@@ -330,15 +333,12 @@ def main(
         # "return_timestamps": return_timestamps,
     }
 
-    # Prepare everything with accelerate
-    model = accelerator.prepare(model)
-
     eval_preds = []
     # eval_labels = []
     eval_ids = []
     start_time = time.perf_counter()
 
-    eval_loader = DataLoader(
+    eval_dataloader = DataLoader(
         vectorized_dataset,
         batch_size=per_device_eval_batch_size,
         collate_fn=data_collator,
@@ -346,9 +346,11 @@ def main(
         pin_memory=True,
     )
 
-    eval_loader = accelerator.prepare(eval_loader)
+    # Prepare everything with accelerate
+    model, eval_dataloader = accelerator.prepare(model, eval_dataloader)
+
     total_steps = int(result.num_rows / per_device_eval_batch_size / accelerator.num_processes)
-    batches = tqdm(eval_loader, total=total_steps, desc="Inferring...", disable=not accelerator.is_local_main_process)
+    batches = tqdm(eval_dataloader, total=total_steps, desc="Inferring...", disable=not accelerator.is_local_main_process)
 
     for step, batch in enumerate(batches):
         utt_ids = batch.pop("utt_ids")

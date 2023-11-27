@@ -2,6 +2,7 @@
 # coding=utf-8
 # Copyright 2023  Bofeng Huang
 
+"""Infer whisper models with vanilla torch dataset (not HF one) and HF accelerate (wrapper to easily extend to DDP or DeepSpeed without modifing code)."""
 
 import copy
 import json
@@ -16,25 +17,13 @@ import numpy as np
 import soundfile as sf
 import torch
 from accelerate import Accelerator
-from datasets import Audio, load_dataset
+from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
 SAMPLE_RATE = 16_000
-
-
-def jsonl_load(file_path, mode="r"):
-    with open(file_path, mode=mode) as f:
-        return [json.loads(l.strip()) for l in f]
-
-
-def jsonl_dump(data, file_path, mode="w", default=str, ensure_ascii=False):
-    with open(file_path, mode=mode) as f:
-        for item in tqdm(data, desc="Writing to json", total=len(data), unit=" samples"):
-            f.write(f"{json.dumps(item, default=default, ensure_ascii=ensure_ascii)}\n")
-
 
 # Copied and adapted from https://github.com/facebookresearch/fairseq/blob/main/fairseq/data/audio/audio_utils.py#L22
 def convert_waveform(
@@ -112,7 +101,7 @@ def get_waveform(
 class SpeechDataset(Dataset):
     def __init__(
         self,
-        segments: List[Dict],
+        segments: Any,
         processor: Any,
         id_column_name: str = "id",
         audio_column_name: str = "audio_filepath",
@@ -137,7 +126,6 @@ class SpeechDataset(Dataset):
         # print(f"Loaded {len(self.dataset)} examples")
 
     def preprocess(self, segments: List[Dict]):
-
         # convert second to frames
         if self.start_column_name in segments[0] and self.duration_column_name in segments[0]:
             new_segments = []
@@ -153,6 +141,11 @@ class SpeechDataset(Dataset):
             segments = new_segments
 
         if self.sort_by_length:
+            if self.duration_column_name not in segments[0]:
+                raise ValueError(
+                    f"Cannot sort utterances because duration_column_name {self.duration_column_name} doesn't exist"
+                )
+            # todo: compute duration
             segments = sorted(segments, key=lambda x: x[self.duration_column_name], reverse=True)
 
         return segments
@@ -160,17 +153,27 @@ class SpeechDataset(Dataset):
     def __getitem__(self, n: int):
         sample = self.dataset[n]
 
-        start = sample.get(self.start_column_name, 0)
-        frames = sample.get(self.duration_column_name, -1)
+        if isinstance(sample[self.audio_column_name], str):
+            start = sample.get(self.start_column_name, 0)
+            frames = sample.get(self.duration_column_name, -1)
 
-        waveform, _ = get_waveform(
-            sample[self.audio_column_name],
-            start=start,
-            frames=frames,
-            mono=True,
-            output_sample_rate=self.sample_rate,
-            always_2d=False,
-        )
+            # read waveform from audio files
+            waveform, _ = get_waveform(
+                sample[self.audio_column_name],
+                start=start,
+                frames=frames,
+                mono=True,
+                output_sample_rate=self.sample_rate,
+                always_2d=False,
+            )
+        else:
+            # resample HF datasets Audio sample
+            waveform, _ = convert_waveform(
+                sample[self.audio_column_name]["array"],
+                sample[self.audio_column_name]["sampling_rate"],
+                to_mono=True,
+                to_sample_rate=self.sample_rate,
+            )
 
         input_dict = self.processor.feature_extractor(waveform, sampling_rate=self.sample_rate)
         processed_input = {self.model_input_name: input_dict[self.model_input_name][0]}
@@ -247,11 +250,11 @@ def main(
     dataset_config_name: Optional[str] = None,
     dataset_split_name: Optional[str] = None,
     id_column_name: str = "id",
-    audio_column_name: str = "audio_filepath",
+    audio_column_name: str = "audio",
     start_column_name: str = "start",
     duration_column_name: str = "duration",
     text_column_name: str = "text",
-    max_label_length: Optional[str] = 128,
+    # max_label_length: Optional[str] = 128,
     sort_by_length: bool = False,
     torch_dtype: str = "float16",
     attn_type: Optional[str] = "flash_attn",
@@ -280,6 +283,32 @@ def main(
     else:
         torch_dtype = torch.float32
 
+    accelerator = Accelerator()
+
+    # load dataset
+    if dataset_file is not None:
+        ext = dataset_file.rsplit(".", 1)[-1]
+        dataset = load_dataset(ext, data_files=dataset_file, split="train")
+    elif dataset_name is not None:
+        dataset = load_dataset(
+            dataset_name,
+            dataset_config_name,
+            split=dataset_split_name,
+            # token=token,
+            # streaming=True,
+        )
+    else:
+        raise ValueError("You have not specified a dataset name nor a custom validation file")
+
+    if id_column_name not in dataset.features.keys():
+        with accelerator.local_main_process_first():
+            dataset = dataset.map(lambda _, idx: {id_column_name: f"{idx:09d}"}, with_indices=True, num_proc=num_processing_workers)
+
+    # Debug
+    # dataset = dataset.select(range(100))
+
+    accelerator.print(dataset)
+
     # load processor
     processor = AutoProcessor.from_pretrained(model_name_or_path)
     # set prefix tokens for tokenizer
@@ -287,10 +316,12 @@ def main(
     tokenizer = processor.tokenizer
     feature_extractor = processor.feature_extractor
     model_sampling_rate = feature_extractor.sampling_rate
+    model_input_name = feature_extractor.model_input_names[0]
 
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         model_name_or_path,
         torch_dtype=torch_dtype,
+        # device_map=device,
         low_cpu_mem_usage=True,
         # use_safetensors=True,
         use_flash_attention_2=attn_type == "flash_attn_2",
@@ -309,31 +340,126 @@ def main(
     )
     # print(f"Model forced_decoder_ids: {model.config.forced_decoder_ids}")
     # todo: include some other tokens dropped by fine-tuning
-    # tmp_config = AutoConfig.from_pretrained("openai/whisper-medium
+    # tmp_config = AutoConfig.from_pretrained("openai/whisper-medium")
+    # model.config.suppress_tokens = tmp_config.suppress_tokens
+    # print(f"Model `suppress_tokens`: {model.config.suppress_tokens}")
 
-    # load dataset
-    if dataset_file is not None:
-        segments = jsonl_load(dataset_file)
-        dataset = SpeechDataset(
-            segments,
-            processor=processor,
-            id_column_name=id_column_name,
-            audio_column_name=audio_column_name,
-            start_column_name=start_column_name,
-            duration_column_name=duration_column_name,
-            text_column_name=text_column_name,
-            sample_rate=model_sampling_rate,
-            sort_by_length=sort_by_length,
-        )
+    accelerator.print("Whisper model has been loaded")
 
-    elif dataset_name is not None:
-        dataset = load_dataset(
-            dataset_name,
-            dataset_config_name,
-            split=dataset_split_name,
-            # token=token,
-            # streaming=True,
-        )
-    else:
-        raise ValueError("You have not specified a dataset name nor a custom validation file")
-    # load data
+    speech_dataset = SpeechDataset(
+        dataset,
+        processor=processor,
+        id_column_name=id_column_name,
+        audio_column_name=audio_column_name,
+        start_column_name=start_column_name,
+        duration_column_name=duration_column_name,
+        text_column_name=text_column_name,
+        sample_rate=model_sampling_rate,
+        sort_by_length=sort_by_length,
+    )
+
+    # define data collator
+    data_collator = DataCollatorSpeechSeq2SeqWithPadding(
+        processor=processor,
+        decoder_start_token_id=model.config.decoder_start_token_id,  # <|startoftranscript|>
+        input_padding="longest",
+        target_padding="longest",
+        # max_target_length=max_label_length,
+        pad_to_multiple_of=8,
+    )
+
+    # Define generation arguments - we need to do this before we wrap the models in DDP
+    # so that we can still access the configs
+    num_beams = generation_num_beams if generation_num_beams is not None else getattr(model.generation_config, "num_beams", 1)
+
+    gen_kwargs = {
+        # "max_length": max_label_length,
+        "num_beams": num_beams,
+        "language": language,
+        "task": task,
+        # "return_timestamps": return_timestamps,
+    }
+
+    eval_preds = []
+    # eval_labels = []
+    eval_ids = []
+    start_time = time.perf_counter()
+
+    eval_dataloader = DataLoader(
+        speech_dataset,
+        batch_size=per_device_eval_batch_size,
+        collate_fn=data_collator,
+        num_workers=dataloader_num_workers,
+        pin_memory=True,
+    )
+
+    # Prepare everything with accelerate
+    model, eval_dataloader = accelerator.prepare(model, eval_dataloader)
+
+    total_steps = int(len(speech_dataset) / per_device_eval_batch_size / accelerator.num_processes)
+    batches = tqdm(eval_dataloader, total=total_steps, desc="Inferring...", disable=not accelerator.is_local_main_process)
+
+    for step, batch in enumerate(batches):
+        utt_ids = batch.pop("utt_ids")
+        # Generate predictions and pad to max generated length
+        generate_fn = model.module.generate if accelerator.num_processes > 1 else model.generate
+        generated_ids = generate_fn(batch[model_input_name].to(dtype=torch_dtype), **gen_kwargs)
+        generated_ids = accelerator.pad_across_processes(generated_ids, dim=1, pad_index=tokenizer.pad_token_id)
+        # Gather all predictions and targets
+        utt_ids, generated_ids = accelerator.gather_for_metrics((utt_ids, generated_ids))
+        # utt_ids, generated_ids, labels = accelerator.gather_for_metrics((utt_ids, generated_ids, batch["labels"]))
+        eval_preds.extend(generated_ids.cpu().numpy())
+        # eval_labels.extend(labels.cpu().numpy())
+        eval_ids.extend(tokenizer.batch_decode(utt_ids, skip_special_tokens=True))
+
+        # if step % logging_steps == 0 and step > 0:
+        #     # batches.write(f"Saving transcriptions for split {split} step {step}")
+        #     accelerator.wait_for_everyone()
+        #     eval_preds = tokenizer.batch_decode(eval_preds, skip_special_tokens=True, decode_with_timestamps=return_timestamps)
+
+        #     jsonl_dump(data, output_file_path, mode="a")
+
+    accelerator.wait_for_everyone()
+    # accelerator.print(f'Inference time: {time.strftime("%dd%Hh%Mm%Ss", time.gmtime(time.perf_counter() - start_time))}')
+
+    elapsed_time = time.perf_counter() - start_time
+    hours, rem = divmod(elapsed_time, 3600)
+    minutes, seconds = divmod(rem, 60)
+    accelerator.print(f"Inference time: {hours:.0f}h {minutes:.0f}m {seconds:.2f}s")
+
+    accelerator.free_memory()
+    del model
+
+    id_pred_mappings = dict(zip(eval_ids, eval_preds))
+
+    def process_function(example):
+        # replace padded labels by the padding token
+        # for label_ids_ in batch["label_ids"]:
+        #     label_ids_[label_ids_ == -100] = tokenizer.pad_token_id
+
+        pred_ids = id_pred_mappings[example[id_column_name]]
+        example["prediction"] = tokenizer.decode(pred_ids, skip_special_tokens=True)
+        # example["prediction"] = tokenizer.decode(pred_ids, skip_special_tokens=True, decode_with_timestamps=return_timestamps)
+        # we do not want to group tokens when computing the metrics
+        # example["label_str"] = tokenizer.batch_decode(example["label_ids"], skip_special_tokens=True)
+
+        return example
+
+    with accelerator.local_main_process_first():
+        dataset = dataset.map(process_function, num_proc=num_processing_workers)
+        # dataset = dataset.remove_columns(set(dataset.column_names) - set([id_column_name, text_column_name, "prediction"]))
+
+    accelerator.print(dataset)
+
+    if accelerator.is_local_main_process:
+        os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
+
+        with open(output_file_path, "w") as manifest_f:
+            for sample in tqdm(dataset, desc="Saving", total=dataset.num_rows, unit=" samples"):
+                manifest_f.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
+
+    accelerator.end_training()
+
+
+if __name__ == "__main__":
+    fire.Fire(main)
