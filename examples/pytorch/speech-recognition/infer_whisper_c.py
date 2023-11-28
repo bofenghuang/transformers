@@ -17,13 +17,14 @@ import numpy as np
 import soundfile as sf
 import torch
 from accelerate import Accelerator
-from datasets import load_dataset
+from datasets import Value, load_dataset
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
 SAMPLE_RATE = 16_000
+
 
 # Copied and adapted from https://github.com/facebookresearch/fairseq/blob/main/fairseq/data/audio/audio_utils.py#L22
 def convert_waveform(
@@ -101,7 +102,7 @@ def get_waveform(
 class SpeechDataset(Dataset):
     def __init__(
         self,
-        segments: Any,
+        dataset: Dataset,
         processor: Any,
         id_column_name: str = "id",
         audio_column_name: str = "audio_filepath",
@@ -109,6 +110,7 @@ class SpeechDataset(Dataset):
         duration_column_name: str = "duration",
         text_column_name: str = "text",
         sample_rate: int = SAMPLE_RATE,
+        num_processing_workers: int = 1,
         sort_by_length: bool = False,
     ):
         self.processor = processor
@@ -118,37 +120,60 @@ class SpeechDataset(Dataset):
         self.duration_column_name = duration_column_name
         self.text_column_name = text_column_name
         self.sample_rate = sample_rate
+        self.num_processing_workers = num_processing_workers
         self.sort_by_length = sort_by_length
 
         self.model_input_name = processor.feature_extractor.model_input_names[0]
 
-        self.dataset = self.preprocess(segments)
+        self.dataset = self.preprocess(dataset)
         # print(f"Loaded {len(self.dataset)} examples")
 
-    def preprocess(self, segments: List[Dict]):
+    def preprocess(self, dataset: Dataset):
         # convert second to frames
-        if self.start_column_name in segments[0] and self.duration_column_name in segments[0]:
-            new_segments = []
-            for audio_path, segments_group in groupby(segments, lambda x: x[self.audio_column_name]):
-                sampling_rate = sf.info(audio_path).samplerate
-                # segments_group = sorted(segments_group, key=lambda x: float(x[self.start_column_name]))
+        # if self.start_column_name in segments[0] and self.duration_column_name in segments[0]:
+        #     new_segments = []
+        #     for audio_path, segments_group in groupby(segments, lambda x: x[self.audio_column_name]):
+        #         sampling_rate = sf.info(audio_path).samplerate
+        #         # segments_group = sorted(segments_group, key=lambda x: float(x[self.start_column_name]))
 
-                for segment in segments_group:
-                    segment[self.start_column_name] = int(float(segment[self.start_column_name]) * sampling_rate)
-                    segment[self.duration_column_name] = int(float(segment[self.duration_column_name]) * sampling_rate)
-                    new_segments.append(segment)
+        #         for segment in segments_group:
+        #             segment[self.start_column_name] = int(float(segment[self.start_column_name]) * sampling_rate)
+        #             segment[self.duration_column_name] = int(float(segment[self.duration_column_name]) * sampling_rate)
+        #             new_segments.append(segment)
 
-            segments = new_segments
+        #     segments = new_segments
+
+        if self.start_column_name in dataset.features and self.duration_column_name in dataset.features:
+            # sampling_rate_mappings = {
+            #     audio_path: sf.info(audio_path).samplerate for audio_path in tqdm(list(set(dataset[self.audio_column_name])))
+            # }
+
+            def _process_function(example):
+                # todo
+                # sampling_rate = sf.info(example[self.audio_column_name]).samplerate
+                # sampling_rate = sampling_rate_mappings.get(example[self.audio_column_name])
+                sampling_rate = SAMPLE_RATE
+
+                # todo: map can't set float to int
+                example[self.start_column_name] = int(float(example[self.start_column_name]) * sampling_rate)
+                example[self.duration_column_name] = int(float(example[self.duration_column_name]) * sampling_rate)
+                return example
+
+            dataset = dataset.map(
+                _process_function, num_proc=self.num_processing_workers, desc="Converting offset and duration"
+            )
+            dataset = dataset.cast_column(self.start_column_name, Value("int64"))
+            dataset = dataset.cast_column(self.duration_column_name, Value("int64"))
 
         if self.sort_by_length:
-            if self.duration_column_name not in segments[0]:
-                raise ValueError(
-                    f"Cannot sort utterances because duration_column_name {self.duration_column_name} doesn't exist"
-                )
+            # if self.duration_column_name not in segments[0]:
+            if self.duration_column_name not in dataset.features:
+                raise ValueError(f"Cannot sort utterances because duration field {self.duration_column_name} doesn't exist")
             # todo: compute duration
-            segments = sorted(segments, key=lambda x: x[self.duration_column_name], reverse=True)
+            # segments = sorted(segments, key=lambda x: x[self.duration_column_name], reverse=True)
+            dataset = dataset.sort(self.duration_column_name, reverse=True)
 
-        return segments
+        return dataset
 
     def __getitem__(self, n: int):
         sample = self.dataset[n]
@@ -302,10 +327,12 @@ def main(
 
     if id_column_name not in dataset.features.keys():
         with accelerator.local_main_process_first():
-            dataset = dataset.map(lambda _, idx: {id_column_name: f"{idx:09d}"}, with_indices=True, num_proc=num_processing_workers)
+            dataset = dataset.map(
+                lambda _, idx: {id_column_name: f"{idx:09d}"}, with_indices=True, num_proc=num_processing_workers
+            )
 
     # Debug
-    # dataset = dataset.select(range(100))
+    # dataset = dataset.select(range(1000))
 
     accelerator.print(dataset)
 
@@ -355,6 +382,7 @@ def main(
         duration_column_name=duration_column_name,
         text_column_name=text_column_name,
         sample_rate=model_sampling_rate,
+        num_processing_workers=num_processing_workers,
         sort_by_length=sort_by_length,
     )
 
@@ -404,13 +432,17 @@ def main(
         # Generate predictions and pad to max generated length
         generate_fn = model.module.generate if accelerator.num_processes > 1 else model.generate
         generated_ids = generate_fn(batch[model_input_name].to(dtype=torch_dtype), **gen_kwargs)
-        generated_ids = accelerator.pad_across_processes(generated_ids, dim=1, pad_index=tokenizer.pad_token_id)
+        utt_ids, generated_ids = accelerator.pad_across_processes(
+            (utt_ids, generated_ids), dim=1, pad_index=tokenizer.pad_token_id
+        )
         # Gather all predictions and targets
-        utt_ids, generated_ids = accelerator.gather_for_metrics((utt_ids, generated_ids))
+        # NB: all tensors should have the same size at this point
         # utt_ids, generated_ids, labels = accelerator.gather_for_metrics((utt_ids, generated_ids, batch["labels"]))
-        eval_preds.extend(generated_ids.cpu().numpy())
+        utt_ids, generated_ids = accelerator.gather_for_metrics((utt_ids, generated_ids))
+        # eval_preds.extend(generated_ids.cpu().numpy())
+        eval_preds.extend(tokenizer.batch_decode(generated_ids.cpu().numpy(), skip_special_tokens=True))
         # eval_labels.extend(labels.cpu().numpy())
-        eval_ids.extend(tokenizer.batch_decode(utt_ids, skip_special_tokens=True))
+        eval_ids.extend(tokenizer.batch_decode(utt_ids.cpu().numpy(), skip_special_tokens=True))
 
         # if step % logging_steps == 0 and step > 0:
         #     # batches.write(f"Saving transcriptions for split {split} step {step}")
@@ -420,8 +452,8 @@ def main(
         #     jsonl_dump(data, output_file_path, mode="a")
 
     accelerator.wait_for_everyone()
-    # accelerator.print(f'Inference time: {time.strftime("%dd%Hh%Mm%Ss", time.gmtime(time.perf_counter() - start_time))}')
 
+    # accelerator.print(f'Inference time: {time.strftime("%dd%Hh%Mm%Ss", time.gmtime(time.perf_counter() - start_time))}')
     elapsed_time = time.perf_counter() - start_time
     hours, rem = divmod(elapsed_time, 3600)
     minutes, seconds = divmod(rem, 60)
@@ -437,9 +469,11 @@ def main(
         # for label_ids_ in batch["label_ids"]:
         #     label_ids_[label_ids_ == -100] = tokenizer.pad_token_id
 
-        pred_ids = id_pred_mappings[example[id_column_name]]
-        example["prediction"] = tokenizer.decode(pred_ids, skip_special_tokens=True)
+        example["prediction"] = id_pred_mappings[example[id_column_name]]
+        # pred_ids = id_pred_mappings[example[id_column_name]]
+        # example["prediction"] = tokenizer.decode(pred_ids, skip_special_tokens=True)
         # example["prediction"] = tokenizer.decode(pred_ids, skip_special_tokens=True, decode_with_timestamps=return_timestamps)
+
         # we do not want to group tokens when computing the metrics
         # example["label_str"] = tokenizer.batch_decode(example["label_ids"], skip_special_tokens=True)
 
