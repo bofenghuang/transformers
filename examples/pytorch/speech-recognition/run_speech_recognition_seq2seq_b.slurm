@@ -1,11 +1,36 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# Copyright 2023  Bofeng Huang
+
+#SBATCH --job-name=training
+#SBATCH --output=logs/training/%x-%j.out # output file (%j = job ID)
+#SBATCH --error=logs/training/%x-%j.err # error file (%j = job ID)
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
+#SBATCH --cpus-per-task=20         # number of cores per tasks
+#SBATCH --gres=gpu:8 # reserve 8 GPUs per node
+#SBATCH --time 100:00:00              # maximum execution time (HH:MM:SS)
+#SBATCH --qos=qos_gpu-t4             # QoS
+#SBATCH --hint=nomultithread         # we get physical cores not logical
+#SBATCH --partition=gpu_p2
+#SBATCH --account=cjc@v100
+
+set -x -e
+
+module purge
+
+module load git-lfs
+module load unrar
+
+module load anaconda-py3/2023.03
+module load cuda/12.1.0
+conda activate speech
 
 # HF cache
-export TRANSFORMERS_CACHE="/projects/bhuang/.cache/huggingface/transformers"
-export HF_DATASETS_CACHE="/projects/bhuang/.cache/huggingface/datasets"
+# export TRANSFORMERS_CACHE="/projects/bhuang/.cache/huggingface/transformers"
+# export HF_DATASETS_CACHE="/projects/bhuang/.cache/huggingface/datasets"
 
 # WANDB related
-# export WANDB_MODE=disabled
+export WANDB_MODE=offline
 # export WANDB_DISABLED=true
 # export WANDB_API_KEY=YOUR_WANDB_API_KEY
 # export WANDB_ENTITY=YOUR_WANDB_ENTITY
@@ -15,7 +40,7 @@ export WANDB_PROJECT=hf-whisper-v3
 export OMP_NUM_THREADS="1"
 
 # https://github.com/microsoft/DeepSpeed/issues/662
-export CUDA_VISIBLE_DEVICES="1,2,3,4,5"
+# export CUDA_VISIBLE_DEVICES="1,2,3,4,5"
 # export CUDA_VISIBLE_DEVICES="1"
 
 # Debugging flags (optional)
@@ -35,17 +60,13 @@ export CUDA_VISIBLE_DEVICES="1,2,3,4,5"
 # model_name_or_path="versae/whisper-large-v3"
 model_name_or_path="openai/whisper-large-v3"
 
-# train_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-07/train_asr_processed_dedup256.json"
-# validation_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-07/valid_asr_mcv13_manifest_normalized_pnc.json"
-# train_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-13/train_asr_processed_dedup256_processed_cleaned.json"
-# validation_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-13/test_asr_mcv13_manifest_normalized_pnc.json"
-train_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-21/train_asr_processed_cleaned.json"
-validation_file="/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-21/test_asr_mcv13_manifest_normalized_pnc.json"
+train_file="$ALL_CCFRSCRATCH/corpus/speech/nemo_manifests/final/2023-11-28/train_asr_processed_cleaned.json"
+validation_file="$ALL_CCFRSCRATCH/corpus/speech/nemo_manifests/final/2023-11-28/test_asr_mcv13_manifest_normalized_pnc.json"
 
-noisedir="/home/bhuang/corpus/speech/public/musan_wo_speech"
+noisedir="$ALL_CCFRSCRATCH/corpus/speech/musan"
 
-run_name="whisper-large-v3-ft-french-pnc-ep8-bs280-lr4e6-wd001-audioaug-specaug-betterdata"
-output_dir="./outputs/hf_whisper/$run_name"
+run_name="whisper-large-v3-ft-french-pnc-ep6-bs256-lr4e6-wd001-specaug-betterdata"
+output_dir="$ALL_CCFRWORK/models/whisper/$run_name"
 
 # --gradient_checkpointing \ vs use_cache
 # --ddp_find_unused_parameters="True" \ and layerdrop, but can't do --gradient_checkpointing
@@ -71,7 +92,7 @@ output_dir="./outputs/hf_whisper/$run_name"
 
 torchrun \
     --master_port 29001 \
-    --nproc_per_node 5 \
+    --nproc_per_node 8 \
     run_speech_recognition_seq2seq_c.py \
     --deepspeed ds_config_zero2_no_offload.json \
     --model_name_or_path $model_name_or_path \
@@ -82,7 +103,7 @@ torchrun \
     --max_duration_in_seconds "30" \
     --apply_audio_augmentation false \
     --background_noise_dir $noisedir \
-    --audio_augmentation_prob "0.2" \
+    --audio_augmentation_prob "0.04" \
     --apply_spec_augment \
     --mask_time_prob "0.05" \
     --mask_time_length "10" \
@@ -93,13 +114,13 @@ torchrun \
     --language "french" \
     --task "transcribe" \
     --preprocessing_num_workers "16" \
-    --dataloader_num_workers "5" \
+    --dataloader_num_workers "8" \
     --output_dir $output_dir \
     --overwrite_output_dir \
     --run_name $run_name \
-    --num_train_epochs "8" \
-    --per_device_train_batch_size "56" \
-    --per_device_eval_batch_size "28" \
+    --num_train_epochs "6" \
+    --per_device_train_batch_size "32" \
+    --per_device_eval_batch_size "16" \
     --gradient_accumulation_steps "1" \
     --optim "adamw_bnb_8bit" \
     --learning_rate "4.375e-6" \
@@ -122,4 +143,5 @@ torchrun \
     --predict_with_generate \
     --generation_num_beams "1" \
     --do_train \
-    --do_eval
+    --do_eval \
+    --report_to "tensorboard" "wandb"
