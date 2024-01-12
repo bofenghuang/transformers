@@ -51,7 +51,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-from utils.model_ner_case_punc import RobertaForCasePunc
+from utils.model_ner_case_punc import RobertaForCasePunc, DebertaV2ForCasePunc
 from utils.collator_ner_case_punc import DataCollatorForCasePunc
 from utils.dataset_ner_case_punc import load_data_files, tokenize_and_align_examples
 # from utils.callbacks_ner_case_punc import WandbProgressResultsCallback
@@ -399,7 +399,6 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
-        # num_hidden_layers=4,
     )
 
     tokenizer_name_or_path = model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path
@@ -425,7 +424,8 @@ def main():
         if tokenizer_name_or_path == "camembert/camembert-large":
             tokenizer.model_max_length = 512
 
-    model = RobertaForCasePunc.from_pretrained(
+    model_class = DebertaV2ForCasePunc if "deberta" in model_args.model_name_or_path else RobertaForCasePunc
+    model = model_class.from_pretrained(
         model_args.model_name_or_path,
         num_case_labels=len(label_lists_by_choice["case"]),
         num_punc_labels=len(label_lists_by_choice["punc"]),

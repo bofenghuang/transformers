@@ -100,6 +100,31 @@ class DistillationTrainer(Trainer):
         ) * (self.args.temperature**2)
         """
 
+        # 1.1 better kl implementation (from distill-whisper)
+        # """
+        def kl_divergence(target_distribution, log_predicted_distribution, labels):
+            kl_loss = nn.KLDivLoss(reduction="none")
+            divergence = kl_loss(log_predicted_distribution, target_distribution)
+            # ignore padded tokens from divergence, i.e. where labels are not set to -100
+            padding_mask = labels >= 0
+            padding_mask = padding_mask.unsqueeze(-1)
+            divergence = divergence * padding_mask
+            # take the average over the mini-batch
+            divergence = divergence.sum() / padding_mask.sum()
+            return divergence
+        
+        case_loss = kl_divergence(
+            F.softmax(case_logits_teacher / self.args.temperature, dim=-1),
+            F.log_softmax(case_logits_student / self.args.temperature, dim=-1),
+            inputs["case_labels"],
+        ) * (self.args.temperature**2)
+        punc_loss = kl_divergence(
+            F.softmax(punc_logits_teacher / self.args.temperature, dim=-1),
+            F.log_softmax(punc_logits_student / self.args.temperature, dim=-1),
+            inputs["punc_labels"],
+        ) * (self.args.temperature**2)
+        # """
+
         # 2. ce loss as distillation loss ??
         """
         # loss_fct = nn.CrossEntropyLoss()
@@ -107,11 +132,12 @@ class DistillationTrainer(Trainer):
         """
 
         # 3. mse loss as distillation loss
+        """
         loss_fct = nn.MSELoss()
 
         case_loss = loss_fct(case_logits_student, case_logits_teacher)
         punc_loss = loss_fct(punc_logits_student, punc_logits_teacher)
-
+        """
 
         # multi task
         # distil_loss = case_loss + punc_loss

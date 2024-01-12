@@ -52,7 +52,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-from utils.model_ner_case_punc import RobertaForCasePunc
+from utils.model_ner_case_punc import RobertaForCasePunc, DebertaV2ForCasePunc
 from utils.collator_ner_case_punc import DataCollatorForCasePunc
 from utils.dataset_ner_case_punc import load_data_files, tokenize_and_align_examples
 # from utils.callbacks_ner_case_punc import WandbProgressResultsCallback
@@ -406,7 +406,6 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
-        num_hidden_layers=6,  # NB
     )
 
     tokenizer_name_or_path = model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path
@@ -452,7 +451,9 @@ def main():
     # assert results
     assert teacher_tokenizer(sample) == tokenizer(sample), "Tokenizers haven't created the same output"
 
-    model = RobertaForCasePunc.from_pretrained(
+    model_class = DebertaV2ForCasePunc if "deberta" in model_args.model_name_or_path else RobertaForCasePunc
+
+    model = model_class.from_pretrained(
         model_args.model_name_or_path,
         num_case_labels=len(label_lists_by_choice["case"]),
         num_punc_labels=len(label_lists_by_choice["punc"]),
@@ -464,7 +465,7 @@ def main():
         ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
     )
 
-    teacher_model = RobertaForCasePunc.from_pretrained(
+    teacher_model = model_class.from_pretrained(
         model_args.teacher_model_name_or_path,
         num_case_labels=len(label_lists_by_choice["case"]),
         num_punc_labels=len(label_lists_by_choice["punc"]),
@@ -680,7 +681,7 @@ def main():
 
     def compute_metrics(p):
         predictions, labels = p
-        # tmp fix
+        # NB: tmp fix
         predictions = predictions[2:]
         # predictions = np.argmax(predictions, axis=2)
         predictions = [np.argmax(predictions_, axis=2) for predictions_ in predictions]
