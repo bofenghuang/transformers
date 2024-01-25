@@ -55,7 +55,7 @@ from utils.augment_audio import SpeechAugmentator
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.38.0.dev0")
+check_min_version("4.36.0.dev0")
 
 require_version("datasets>=1.18.0", "To fix: pip install -r examples/pytorch/speech-recognition/requirements.txt")
 
@@ -100,12 +100,16 @@ class ModelArguments:
             "help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler."
         },
     )
+    conformer_conv_dropout: float = field(
+        default=0.0,
+        metadata={"help": ""},
+    )
     final_dropout: float = field(
         default=0.0,
         metadata={"help": "The dropout probability for the final projection layer."},
     )
     mask_time_prob: float = field(
-        default=0.05,
+        default=0.0,
         metadata={
             "help": (
                 "Probability of each feature vector along the time axis to be chosen as the start of the vector "
@@ -537,7 +541,7 @@ def main():
             )
 
         if data_args.max_train_samples is not None:
-            raw_datasets["train"] = raw_datasets["train"].select(range(data_args.max_train_samples))
+            raw_datasets["train"] = raw_datasets["train"].shuffle(training_args.seed).select(range(data_args.max_train_samples))
 
     if training_args.do_eval:
         if data_args.validation_file is not None:
@@ -554,7 +558,7 @@ def main():
             raise ValueError("You have not specified a dataset name nor a custom validation file")
 
         if data_args.max_eval_samples is not None:
-            raw_datasets["eval"] = raw_datasets["eval"].select(range(data_args.max_eval_samples))
+            raw_datasets["eval"] = raw_datasets["eval"].shuffle(training_args.seed).select(range(data_args.max_eval_samples))
 
     # 2. We remove some special characters from the datasets
     # that make training complicated and do not help in transcribing the speech
@@ -671,6 +675,7 @@ def main():
             "feat_proj_dropout": model_args.feat_proj_dropout,
             "attention_dropout": model_args.attention_dropout,
             "hidden_dropout": model_args.hidden_dropout,
+            "conformer_conv_dropout": model_args.conformer_conv_dropout,
             "final_dropout": model_args.final_dropout,
             "mask_time_prob": model_args.mask_time_prob,
             "mask_time_length": model_args.mask_time_length,
@@ -706,8 +711,8 @@ def main():
     # )
 
     # freeze encoder
-    if model_args.freeze_feature_encoder:
-        model.freeze_feature_encoder()
+    # if model_args.freeze_feature_encoder:
+    #     model.freeze_feature_encoder()
 
     # 6. Now we preprocess the datasets including loading the audio, resampling and normalization
     # Thankfully, `datasets` takes care of automatically loading and resampling the audio,
@@ -892,6 +897,10 @@ def main():
         tokenizer=processor,
         # optimizers=(optimizer, None),
     )
+
+    # bh: pb w/ gradient_checkpointing
+    # https://github.com/huggingface/transformers/issues/21381
+    # model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
     # bh:
     # if data_args.early_stopping_patience is not None:
