@@ -474,6 +474,7 @@ def main():
     )
 
     # bh: train the model to predict language and task
+    # todo: remove this
     config.update(
         {
             "forced_decoder_ids": model_args.forced_decoder_ids,

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
 # HF cache
-export TRANSFORMERS_CACHE="/projects/bhuang/.cache/huggingface/transformers"
-export HF_DATASETS_CACHE="/projects/bhuang/.cache/huggingface/datasets"
+export HF_HOME="/projects/bhuang/.cache/huggingface"
 
 # WANDB related
 # export WANDB_MODE=disabled
@@ -50,12 +49,12 @@ output_dir="./outputs/hf_whisper/$run_name"
 # --gradient_checkpointing \ vs use_cache
 # --ddp_find_unused_parameters="True" \ and layerdrop, but can't do --gradient_checkpointing
 
-    # --ddp_timeout 36000 \
+# todo :  --timestamp_probability 0.2; --condition_on_prev_probability 0
 
+    # --ddp_timeout 36000 \
     # --adam_beta2 "0.98" \
     # --adam_beta2 "0.95" \
     # --weight_decay "0.01" \
-    # todo: ep, wd
 
 # accelerate but
     # --group_by_length \

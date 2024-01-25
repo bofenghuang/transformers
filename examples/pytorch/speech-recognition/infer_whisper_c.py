@@ -17,7 +17,7 @@ import numpy as np
 import soundfile as sf
 import torch
 from accelerate import Accelerator
-from datasets import Value, load_dataset
+from datasets import Audio, Value, load_dataset
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -108,9 +108,11 @@ class SpeechDataset(Dataset):
         audio_column_name: str = "audio_filepath",
         start_column_name: str = "start",
         duration_column_name: str = "duration",
-        text_column_name: str = "text",
+        # text_column_name: str = "text",
         sample_rate: int = SAMPLE_RATE,
         num_processing_workers: int = 1,
+        min_duration: Optional[Union[int, float]] = None,
+        max_duration: Optional[Union[int, float]] = None,
         sort_by_length: bool = False,
     ):
         self.processor = processor
@@ -118,9 +120,11 @@ class SpeechDataset(Dataset):
         self.audio_column_name = audio_column_name
         self.start_column_name = start_column_name
         self.duration_column_name = duration_column_name
-        self.text_column_name = text_column_name
+        # self.text_column_name = text_column_name
         self.sample_rate = sample_rate
         self.num_processing_workers = num_processing_workers
+        self.min_duration = min_duration
+        self.max_duration = max_duration
         self.sort_by_length = sort_by_length
 
         self.model_input_name = processor.feature_extractor.model_input_names[0]
@@ -143,33 +147,57 @@ class SpeechDataset(Dataset):
 
         #     segments = new_segments
 
-        if self.start_column_name in dataset.features and self.duration_column_name in dataset.features:
-            # sampling_rate_mappings = {
-            #     audio_path: sf.info(audio_path).samplerate for audio_path in tqdm(list(set(dataset[self.audio_column_name])))
-            # }
+        # if self.start_column_name in dataset.features and self.duration_column_name in dataset.features:
+        #     # sampling_rate_mappings = {
+        #     #     audio_path: sf.info(audio_path).samplerate for audio_path in tqdm(list(set(dataset[self.audio_column_name])))
+        #     # }
 
-            def _process_function(example):
-                # todo
-                # sampling_rate = sf.info(example[self.audio_column_name]).samplerate
-                # sampling_rate = sampling_rate_mappings.get(example[self.audio_column_name])
-                sampling_rate = SAMPLE_RATE
+        #     def _process_function(example):
+        #         # sampling_rate = sf.info(example[self.audio_column_name]).samplerate
+        #         # sampling_rate = sampling_rate_mappings.get(example[self.audio_column_name])
+        #         sampling_rate = SAMPLE_RATE
 
-                # todo: map can't set float to int
-                example[self.start_column_name] = int(float(example[self.start_column_name]) * sampling_rate)
-                example[self.duration_column_name] = int(float(example[self.duration_column_name]) * sampling_rate)
-                return example
+        #         # todo: map can't set float to int
+        #         example[self.start_column_name] = int(float(example[self.start_column_name]) * sampling_rate)
+        #         example[self.duration_column_name] = int(float(example[self.duration_column_name]) * sampling_rate)
+        #         return example
 
-            dataset = dataset.map(
-                _process_function, num_proc=self.num_processing_workers, desc="Converting offset and duration"
-            )
-            dataset = dataset.cast_column(self.start_column_name, Value("int64"))
-            dataset = dataset.cast_column(self.duration_column_name, Value("int64"))
+        #     dataset = dataset.map(
+        #         _process_function, num_proc=self.num_processing_workers, desc="converting offset and duration"
+        #     )
+        #     dataset = dataset.cast_column(self.start_column_name, Value("int64"))
+        #     dataset = dataset.cast_column(self.duration_column_name, Value("int64"))
+
+        if self.duration_column_name not in dataset.features and (
+            self.min_duration is not None or self.max_duration is not None or self.sort_by_length
+        ):
+            if dataset.features[self.audio_column_name].dtype == "dict":
+                dataset = dataset.map(
+                    lambda x: {self.duration_column_name: x[self.audio_column_name]["array"].shape[0] / self.sample_rate},
+                    num_proc=self.num_processing_workers,
+                    desc="getting duration",
+                )
+            elif dataset.features[self.audio_column_name].dtype == "str":
+                dataset = dataset.map(
+                    lambda x: {self.duration_column_name: sf.info(x[self.audio_column_name]).duration},
+                    num_proc=self.num_processing_workers,
+                    desc="getting duration",
+                )
+            else:
+                raise NotImplementedError(f"Not implemented type: {dataset.features[self.audio_column_name]}")
+
+        if self.min_duration is not None or self.max_duration is not None:
+
+            def _filter_function(example):
+                if self.min_duration is not None and example[self.duration_column_name] < self.min_duration:
+                    return False
+                if self.max_duration is not None and example[self.duration_column_name] > self.max_duration:
+                    return False
+                return True
+
+            dataset = dataset.filter(_filter_function, num_proc=self.num_processing_workers)
 
         if self.sort_by_length:
-            # if self.duration_column_name not in segments[0]:
-            if self.duration_column_name not in dataset.features:
-                raise ValueError(f"Cannot sort utterances because duration field {self.duration_column_name} doesn't exist")
-            # todo: compute duration
             # segments = sorted(segments, key=lambda x: x[self.duration_column_name], reverse=True)
             dataset = dataset.sort(self.duration_column_name, reverse=True)
 
@@ -182,6 +210,16 @@ class SpeechDataset(Dataset):
             start = sample.get(self.start_column_name, 0)
             frames = sample.get(self.duration_column_name, -1)
 
+            start, frames = 0, -1
+            if (start := sample.get(self.start_column_name)) is not None and (
+                frames := sample.get(self.duration_column_name)
+            ) is not None:
+                # sampling_rate = sf.info(sample[self.audio_column_name]).samplerate
+                sampling_rate = SAMPLE_RATE
+                # convert second to frames
+                start = int(float(start) * sampling_rate)
+                frames = int(float(frames) * sampling_rate)
+
             # read waveform from audio files
             waveform, _ = get_waveform(
                 sample[self.audio_column_name],
@@ -191,14 +229,19 @@ class SpeechDataset(Dataset):
                 output_sample_rate=self.sample_rate,
                 always_2d=False,
             )
-        else:
+        elif isinstance(sample[self.audio_column_name], dict):
             # resample HF datasets Audio sample
-            waveform, _ = convert_waveform(
-                sample[self.audio_column_name]["array"],
-                sample[self.audio_column_name]["sampling_rate"],
-                to_mono=True,
-                to_sample_rate=self.sample_rate,
-            )
+            # accept a waveform of C x T
+            # waveform, _ = convert_waveform(
+            #     sample[self.audio_column_name]["array"],
+            #     sample[self.audio_column_name]["sampling_rate"],
+            #     to_mono=True,
+            #     to_sample_rate=self.sample_rate,
+            # )
+            # already resampled by HF Audio feature
+            waveform = sample[self.audio_column_name]["array"]
+        else:
+            raise NotImplementedError(f"Not implemented type: {sample[self.audio_column_name]}")
 
         input_dict = self.processor.feature_extractor(waveform, sampling_rate=self.sample_rate)
         processed_input = {self.model_input_name: input_dict[self.model_input_name][0]}
@@ -278,8 +321,10 @@ def main(
     audio_column_name: str = "audio",
     start_column_name: str = "start",
     duration_column_name: str = "duration",
-    text_column_name: str = "text",
+    # text_column_name: str = "text",
     # max_label_length: Optional[str] = 128,
+    min_duration: Optional[Union[int, float]] = None,
+    max_duration: Optional[Union[int, float]] = None,
     sort_by_length: bool = False,
     torch_dtype: str = "float16",
     attn_type: Optional[str] = "flash_attn",
@@ -309,32 +354,6 @@ def main(
         torch_dtype = torch.float32
 
     accelerator = Accelerator()
-
-    # load dataset
-    if dataset_file is not None:
-        ext = dataset_file.rsplit(".", 1)[-1]
-        dataset = load_dataset(ext, data_files=dataset_file, split="train")
-    elif dataset_name is not None:
-        dataset = load_dataset(
-            dataset_name,
-            dataset_config_name,
-            split=dataset_split_name,
-            # token=token,
-            # streaming=True,
-        )
-    else:
-        raise ValueError("You have not specified a dataset name nor a custom validation file")
-
-    if id_column_name not in dataset.features.keys():
-        with accelerator.local_main_process_first():
-            dataset = dataset.map(
-                lambda _, idx: {id_column_name: f"{idx:09d}"}, with_indices=True, num_proc=num_processing_workers
-            )
-
-    # Debug
-    # dataset = dataset.select(range(1000))
-
-    accelerator.print(dataset)
 
     # load processor
     processor = AutoProcessor.from_pretrained(model_name_or_path)
@@ -373,6 +392,37 @@ def main(
 
     accelerator.print("Whisper model has been loaded")
 
+    # load dataset
+    if dataset_file is not None:
+        ext = dataset_file.rsplit(".", 1)[-1]
+        dataset = load_dataset(ext, data_files=dataset_file, split="train")
+    elif dataset_name is not None:
+        dataset = load_dataset(
+            dataset_name,
+            dataset_config_name,
+            split=dataset_split_name,
+            # token=token,
+            # streaming=True,
+        )
+        # resample, mono
+        dataset = dataset.cast_column(audio_column_name, Audio(sampling_rate=model_sampling_rate, mono=True))
+    else:
+        raise ValueError("You have not specified a dataset name nor a custom validation file")
+
+    if id_column_name not in dataset.features.keys():
+        with accelerator.local_main_process_first():
+            dataset = dataset.map(
+                lambda _, idx: {id_column_name: f"{idx:09d}"}, with_indices=True, num_proc=num_processing_workers
+            )
+    elif dataset.features[id_column_name].dtype != "str":
+        # cast id to string to tokenize
+        dataset = dataset.cast_column(id_column_name, Value("string"))
+
+    # Debug
+    # dataset = dataset.select(range(100))
+
+    accelerator.print(dataset)
+
     speech_dataset = SpeechDataset(
         dataset,
         processor=processor,
@@ -380,11 +430,14 @@ def main(
         audio_column_name=audio_column_name,
         start_column_name=start_column_name,
         duration_column_name=duration_column_name,
-        text_column_name=text_column_name,
+        # text_column_name=text_column_name,
         sample_rate=model_sampling_rate,
         num_processing_workers=num_processing_workers,
+        min_duration=min_duration,
+        max_duration=max_duration,
         sort_by_length=sort_by_length,
     )
+    accelerator.print(f"Loaded {len(dataset)} samples")
 
     # define data collator
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(
@@ -490,6 +543,8 @@ def main(
 
         with open(output_file_path, "w") as manifest_f:
             for sample in tqdm(dataset, desc="Saving", total=dataset.num_rows, unit=" samples"):
+                # only save serializable types
+                sample = {k: v for k, v in sample.items() if isinstance(v, (str, int, float))}
                 manifest_f.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
 
     accelerator.end_training()

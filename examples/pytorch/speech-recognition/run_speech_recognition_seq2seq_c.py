@@ -319,12 +319,13 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         model_input_name = self.processor.model_input_names[0]
 
         for feature in features:
-
             # read waveform
             waveform, sample_rate = sf.read(
                 feature[self.audio_column_name], start=0, frames=-1, dtype="float32", always_2d=True
             )
             waveform = waveform[:, 0]
+
+            feature["input_length"] = waveform.shape[0]
 
             if self.augmentator is not None:
                 # don't know why here is a list but not np array

@@ -5,14 +5,17 @@
 """
 Usage:
 ./scripts/convert_whisper_to_openai.py \
-    --hf_model_name_or_path outputs/general/whisper-large-v2-ft-french-lr4e6-bs256-augment \
-    --whisper_state_path outputs/general/whisper-large-v2-ft-french-lr4e6-bs256-augment/checkpoint_openai.pt
+    --hf_model_name_or_path bofenghuang/whisper-large-v3-french \
+    --whisper_state_path models/bofenghuang/whisper-large-v3-french/model_openai.pt \
+    --torch_dtype float16
 """
 
 from copy import deepcopy
-import torch
-from transformers import WhisperForConditionalGeneration
+
 import fire
+import torch
+
+from transformers import WhisperForConditionalGeneration
 
 WHISPER_MAPPING = {
     "layers": "blocks",
@@ -53,26 +56,36 @@ def rename_keys(s_dict):
     return s_dict
 
 
-def convert_hf_whisper(hf_model_name_or_path: str, whisper_state_path: str):
+def convert_hf_whisper(hf_model_name_or_path: str, whisper_state_path: str, torch_dtype: str = "float32"):
     # NB: smaller in fp16
-    model_args = {
-        "torch_dtype": torch.float16
-    }
-    transformer_model = WhisperForConditionalGeneration.from_pretrained(hf_model_name_or_path, **model_args)
+    transformer_model = WhisperForConditionalGeneration.from_pretrained(
+        hf_model_name_or_path, torch_dtype=getattr(torch, torch_dtype)
+    )
+    print(transformer_model.dtype)
+
+    """
+    transformer_model.save_pretrained(
+        "/projects/bhuang/models/asr/public/whisper-large-v3-french/pytorch_model",
+        max_shard_size="10GB",
+        safe_serialization=False,
+    )
+    quit()
+    """
+
     config = transformer_model.config
 
     # first build dims
     dims = {
-        'n_mels': config.num_mel_bins,
-        'n_vocab': config.vocab_size,
-        'n_audio_ctx': config.max_source_positions,
-        'n_audio_state': config.d_model,
-        'n_audio_head': config.encoder_attention_heads,
-        'n_audio_layer': config.encoder_layers,
-        'n_text_ctx': config.max_target_positions,
-        'n_text_state': config.d_model,
-        'n_text_head': config.decoder_attention_heads,
-        'n_text_layer': config.decoder_layers
+        "n_mels": config.num_mel_bins,
+        "n_vocab": config.vocab_size,
+        "n_audio_ctx": config.max_source_positions,
+        "n_audio_state": config.d_model,
+        "n_audio_head": config.encoder_attention_heads,
+        "n_audio_layer": config.encoder_layers,
+        "n_text_ctx": config.max_target_positions,
+        "n_text_state": config.d_model,
+        "n_text_head": config.decoder_attention_heads,
+        "n_text_layer": config.decoder_layers,
     }
 
     state_dict = deepcopy(transformer_model.model.state_dict())

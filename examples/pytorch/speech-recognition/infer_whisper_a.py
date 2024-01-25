@@ -16,7 +16,7 @@ from datasets import Audio, load_dataset
 from tqdm import tqdm
 import fire
 
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+from transformers import AutoModelForSpeechSeq2Seq, AutoModelForCausalLM, AutoProcessor, pipeline
 from transformers.pipelines.pt_utils import KeyDataset
 
 
@@ -114,6 +114,7 @@ def main(
     task: str = "transcribe",
     # return_timestamps: bool = False,
     generation_num_beams: Optional[int] = None,
+    assistant_model_name_or_path: Optional[str] = None,
     chunk_length_s: Optional[float] = None,
     stride_length_s: Optional[float] = None,
     per_device_eval_batch_size: int = 8,
@@ -140,6 +141,7 @@ def main(
     # load dataset
     if dataset_file is not None:
         ext = dataset_file.rsplit(".", 1)[-1]
+        ext = "json" if ext == "jsonl" else ext
         dataset = load_dataset(ext, data_files=dataset_file, split="train")
     elif dataset_name is not None:
         dataset = load_dataset(
@@ -157,7 +159,7 @@ def main(
     dataset_features = list(dataset.features.keys())
 
     # Debug
-    dataset = dataset.select(range(100))
+    # dataset = dataset.select(range(100))
 
     # tmp fix
     dataset = dataset.map(
@@ -202,6 +204,22 @@ def main(
     # model.config.suppress_tokens = tmp_config.suppress_tokens
     # print(f"Model `suppress_tokens`: {model.config.suppress_tokens}")
 
+    assistant_model = None
+    if assistant_model_name_or_path is not None:
+        assistant_model = AutoModelForCausalLM.from_pretrained(
+            assistant_model_name_or_path,
+            torch_dtype=torch_dtype,
+            device_map=device,
+            low_cpu_mem_usage=True,
+            # use_safetensors=True,
+            use_flash_attention_2=attn_type == "flash_attn_2",
+        )
+
+        if attn_type == "flash_attn":
+            assistant_model = assistant_model.to_bettertransformer()
+
+        assistant_model.eval()
+
     print("Model has been loaded")
 
     # read segments
@@ -237,7 +255,7 @@ def main(
     # so that we can still access the configs
     num_beams = generation_num_beams if generation_num_beams is not None else getattr(model.generation_config, "num_beams", 1)
 
-    gen_kwargs = {
+    generate_kwargs = {
         # "max_length": max_label_length,
         "num_beams": num_beams,
         # "language": language,
@@ -245,19 +263,24 @@ def main(
         # "return_timestamps": return_timestamps,
     }
 
+    if assistant_model is not None:
+        generate_kwargs["assistant_model"] = assistant_model
+
     pipe = pipeline(
         "automatic-speech-recognition",
         model=model,
         feature_extractor=processor.feature_extractor,
         tokenizer=processor.tokenizer,
+        torch_dtype=torch_dtype,
+        # device="cuda:0" if torch.cuda.is_available() else "cpu",
+        # device=device,
         # max_new_tokens=128,  # todo
         chunk_length_s=chunk_length_s,
         stride_length_s=stride_length_s,
-        num_workers=dataloader_num_workers,
         batch_size=per_device_eval_batch_size,
-        torch_dtype=torch_dtype,
-        # device=device,
-        # **gen_kwargs,
+        num_workers=dataloader_num_workers,
+        # return_timestamps=return_timestamps,
+        generate_kwargs=generate_kwargs,
     )
 
     start_time = time.perf_counter()
@@ -297,6 +320,8 @@ def main(
             # tmp fix
             # sample[audio_column_name] = sample.pop(audio_column_name)["path"]
             sample[audio_column_name] = sample.pop(f"tmp_{audio_column_name}")
+            if not isinstance(sample[audio_column_name], str):
+                del sample[audio_column_name]
             manifest_f.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
 
 
