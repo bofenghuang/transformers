@@ -64,9 +64,6 @@ output_dir="./outputs/phoneme/$run_name"
 #     run_speech_recognition_ctc_b.py \
 #     --deepspeed ds_config.json \
 
-b2 0.95
-add_adapter
-
 torchrun \
     --master_port 29001 \
     --nproc_per_node 4 \
@@ -93,7 +90,6 @@ torchrun \
     --per_device_eval_batch_size "32" \
     --gradient_accumulation_steps "2" \
     --learning_rate "1e-4" \
-    --adam_beta2 "0.95" \
     --warmup_ratio "0.05" \
     --lr_scheduler_type "cosine" \
     --weight_decay "0.01" \
