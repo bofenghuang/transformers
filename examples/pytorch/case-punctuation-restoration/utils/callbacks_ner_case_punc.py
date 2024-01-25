@@ -69,6 +69,7 @@ def gather_pre_entities(
         return pre_entities
 
 
+# todo
 class WandbProgressResultsCallback(WandbCallback):
     def __init__(self, trainer, sample_dataset): 
         super().__init__()

@@ -26,68 +26,37 @@ export OMP_NUM_THREADS="1"
 export TOKENIZERS_PARALLELISM="false"
 export BITSANDBYTES_NOWELCOME="1"
 
-# export CUDA_VISIBLE_DEVICES="0,1,2,5"
-export CUDA_VISIBLE_DEVICES="1"
+# export CUDA_VISIBLE_DEVICES="1"
 
-
-	# --model_name_or_path "camembert-base" \
-	# --output_dir "outputs/punc/camembert-base_ft" \
-
-	# --model_name_or_path "xlm-roberta-base" \
-	# --output_dir "outputs/punc/xlm-roberta-base_ft" \
-
-	# --model_name_or_path "camembert/camembert-large" \
-	# --output_dir "outputs/punc/camembert-large_ft" \
-
-	# 	--model_name_or_path "xlm-roberta-large" \
-	# 	--output_dir "outputs/punc/xlm-roberta-large_ft" \
 
 	# --preprocess_label_strategy '{"case": "first", "punc": "last"}' \
 	# --preprocess_label_replacers '{"case": {"OTHER": "LOWER"}, "punc": {"EXCLAMATION": "PERIOD", "COLON": "COMMA"}}' \
 	# --group_by_length \
-	# --fp16 \
+
+# model_name_or_path="camembert-base"
+# model_name_or_path="camembert/camembert-large"
+# model_name_or_path="xlm-roberta-base"
+# model_name_or_path="xlm-roberta-large"
+# model_name_or_path="/home/bhuang/models/casepunc/pretrained/xlm_roberta_base_trimmed_54k"
+# model_name_or_path="/home/bhuang/models/casepunc/pretrained/xlm_roberta_large_trimmed_54k"
+# model_name_or_path="microsoft/mdeberta-v3-base"
+model_name_or_path="/home/bhuang/models/casepunc/pretrained/mdeberta_v3_base_vocab78k"
+
+# run_name="xlm_roberta_base_trimmed_54k_ft_fr_ep5_bs256_lr3e5"
+# run_name="xlm_roberta_large_trimmed_54k_ft_fr_ep5_bs256_lr3e5"
+# run_name="mdeberta_v3_base_vocab78k_ft_fr_ep5_bs256_lr3e5"
+run_name="mdeberta_v3_base_vocab78k_ft_multilingual_ep5_bs512_lr3e5"
+
+# output_dir="outputs/fr/${run_name}"
+output_dir="outputs/multilingual/${run_name}"
 
 # python3 run_ner_case_punc.py \
-# 	--task_config '["case", "punc"]' \
-# 	--train_data_dir "/home/bhuang/corpus/text/case_punctuation/final/train" \
-# 	--validation_data_dir "/home/bhuang/corpus/text/case_punctuation/final/validation" \
-# 	--test_data_dir "/home/bhuang/corpus/text/case_punctuation/final/test" \
-# 	--text_column_name "word" \
-# 	--label_column_name "label" \
-# 	--preprocess_stride "100" \
-# 	--preprocess_label_strategy '{"case": "all", "punc": "all"}' \
-# 	--preprocess_label_replacers '{"case": {"OTHER": "CAPITALIZE"}}' \
-# 	--preprocessing_num_workers "16" \
-# 	--dataloader_num_workers "1" \
-# 	--model_name_or_path "xlm-roberta-large" \
-# 	--output_dir "outputs/casepunc_fr/xlm_roberta_large_ft_bs256_lr5e5" \
-# 	--run_name "xlm_roberta_large_ft_bs256_lr5e5" \
-# 	--overwrite_output_dir \
-# 	--per_device_train_batch_size "128" \
-# 	--per_device_eval_batch_size "128" \
-# 	--gradient_accumulation_steps "2" \
-# 	--num_train_epochs "3" \
-# 	--learning_rate "5e-5" \
-# 	--warmup_ratio "0.1" \
-# 	--lr_scheduler_type "cosine" \
-# 	--weight_decay "0.01" \
-# 	--gradient_checkpointing \
-# 	--fp16 \
-# 	--log_level "info" \
-# 	--logging_steps "10" \
-# 	--logging_first_step \
-# 	--save_strategy "steps" \
-# 	--save_steps "500" \
-# 	--save_total_limit "2" \
-# 	--evaluation_strategy "steps" \
-# 	--eval_steps "500" \
-# 	--load_best_model_at_end \
-# 	--report_to "tensorboard" "wandb" \
-# 	--do_train \
-# 	--do_eval \
-# 	--do_predict
 
-python3 run_ner_case_punc.py \
+accelerate launch \
+    --multi_gpu \
+    --num_processes 2 \
+	--mixed_precision fp16 \
+	run_ner_case_punc.py \
 	--task_config '["case", "punc"]' \
 	--train_data_dir "/home/bhuang/corpus/text/case_punctuation/final/train" \
 	--validation_data_dir "/home/bhuang/corpus/text/case_punctuation/final/validation" \
@@ -99,15 +68,15 @@ python3 run_ner_case_punc.py \
 	--preprocess_label_replacers '{"case": {"OTHER": "CAPITALIZE"}}' \
 	--preprocessing_num_workers "16" \
 	--dataloader_num_workers "1" \
-	--model_name_or_path "/home/bhuang/models/casepunc/pretrained/xlm_roberta_base_trimmed_54k" \
-	--output_dir "outputs/casepunc_multilingual/xlm_roberta_base_trimmed_54k_ft_multilingual_ep5_bs256_lr2e5_weightedpunk" \
-	--run_name "xlm_roberta_base_trimmed_54k_ft_multilingual_ep5_bs256_lr2e5_weightedpunk" \
+	--model_name_or_path $model_name_or_path \
+	--output_dir $output_dir \
+	--run_name $run_name \
 	--overwrite_output_dir \
-	--per_device_train_batch_size "256" \
-	--per_device_eval_batch_size "256" \
-	--gradient_accumulation_steps "1" \
+	--per_device_train_batch_size "64" \
+	--per_device_eval_batch_size "64" \
+	--gradient_accumulation_steps "4" \
 	--num_train_epochs "5" \
-	--learning_rate "2e-5" \
+	--learning_rate "3e-5" \
 	--warmup_ratio "0.05" \
 	--lr_scheduler_type "cosine" \
 	--weight_decay "0.01" \
