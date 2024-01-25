@@ -5,17 +5,22 @@ import sys
 
 sys.path.append("/home/bhuang/myscripts")
 
+import json
 import re
 
-import fire
-from datasets import load_dataset
 # from jiwer import wer
 import evaluate
+import fire
+from datasets import load_dataset
+from datasets.utils.logging import disable_progress_bar
+from jiwer import process_words
+from nltk import ngrams
 
 from asr_metric_calculation.compute_wer import compute_wer
 from text_normalization.normalize_french import FrenchTextNormalizer
-
 # from .hf_dataset_processing.file_utils import write_dataset_to_json
+
+disable_progress_bar()
 
 # from nltk.stem.snowball import SnowballStemmer
 # from nltk import word_tokenize
@@ -39,6 +44,37 @@ from text_normalization.normalize_french import FrenchTextNormalizer
 #     return stemmed_sentence
 
 
+def compute_metrics(references, predictions, ngram_degree=5):
+    wer_output = process_words(references, predictions)
+
+    num_ref_words = sum([len(ref) for ref in wer_output.references])
+
+    wer_norm = 100 * wer_output.wer
+    ier_norm = 100 * wer_output.insertions / num_ref_words
+    ser_norm = 100 * wer_output.substitutions / num_ref_words
+    der_norm = 100 * wer_output.deletions / num_ref_words
+
+    all_ngrams = list(ngrams(" ".join(predictions).split(), ngram_degree))
+    repeated_ngrams_per_dataset = len(all_ngrams) - len(set(all_ngrams))
+
+    repeated_ngrams_per_utt = 0
+    for prediction_ in predictions:
+        all_ngrams_ = list(ngrams(prediction_.split(), ngram_degree))
+        repeated_ngrams_per_utt += len(all_ngrams_) - len(set(all_ngrams_))
+
+    return {
+        "wer": wer_norm,
+        "ier": ier_norm,
+        "ser": ser_norm,
+        "der": der_norm,
+        # f"repeated_{ngram_degree}grams": repeated_ngrams,
+        f"per_dataset_repeated_{ngram_degree}grams": repeated_ngrams_per_dataset,
+        f"per_utterance_repeated_{ngram_degree}grams": repeated_ngrams_per_utt,
+        "num_ref_words": num_ref_words,
+        "num_ref_sentences": len(references),
+    }
+
+
 def main(
     input_file_path: str,
     output_dir: str,
@@ -46,6 +82,7 @@ def main(
     id_column_name: str = "id",
     target_column_name: str = "text",
     prediction_column_name: str = "prediction",
+    ngram_degree: int = 5,
     num_processing_workers: int = 32,
     do_ignore_words: bool = False,
 ):
@@ -113,6 +150,8 @@ def main(
         lambda x: len(x) > 0, input_columns=f"normalized_{target_column_name}", num_proc=num_processing_workers
     )
 
+    assert dataset.num_rows == len(set(dataset[id_column_name]))
+
     # load metric
     wer_metric = evaluate.load("wer")
     cer_metric = evaluate.load("cer")
@@ -128,6 +167,13 @@ def main(
     print(f"WER: {overall_wer:.4f}, Normalized WER: {norm_overall_wer:.4f}")
     print(f"CER: {overall_cer:.4f}, Normalized CER: {norm_overall_cer:.4f}")
 
+    result = compute_metrics(
+        dataset[f"normalized_{target_column_name}"], dataset[f"normalized_{prediction_column_name}"], ngram_degree=ngram_degree
+    )
+    print("\nNORMALIZED METRICS")
+    print(json.dumps(result, indent=4))
+
+    # speechbrain-style wer and alignment
     targets = dict(zip(dataset[id_column_name], dataset[f"{target_column_name}_split"]))
     predictions = dict(zip(dataset[id_column_name], dataset[f"{prediction_column_name}_split"]))
     compute_wer(targets, predictions, f"{output_dir}/wer_summary", do_print_top_wer=True, do_catastrophic=True)
