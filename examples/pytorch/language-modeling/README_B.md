@@ -1,0 +1,4 @@
+
+```bash
+CUDA_VISIBLE_DEVICES=2 ./run_mlm.py --model_name_or_path camembert/camembert-large --train_file /home/bhuang/corpus/text/internal/intent/data_bank_text/2022-06-06/data_clean_uniq_3gramplus_shuffle_train.csv --validation_file /home/bhuang/corpus/text/internal/intent/data_bank/test_wo_label.csv --do_train --do_eval --output_dir outputs/mlm/camembert-large/databank_text/2022-06-23  --line_by_line --warmup_ratio 0.1 --fp16 --report_to wandb --per_device_train_batch_size 64 --per_device_eval_batch_size 64 --auto_find_batch_size --num_train_epochs 100 --evaluation_strategy epoch --save_strategy epoch --load_best_model_at_end True
+```
