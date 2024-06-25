@@ -605,6 +605,7 @@ class Wav2Vec2Attention(nn.Module):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
                 )
+            # bh: attention_mask has now -inf for masked tokens
             attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
@@ -1115,6 +1116,7 @@ class Wav2Vec2EncoderStableLayerNorm(nn.Module):
                 attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
             else:
                 # extend attention_mask
+                # bh: extend attention_mask, 1 -> 0, 0 -> -inf
                 attention_mask = 1.0 - attention_mask[:, None, None, :].to(dtype=hidden_states.dtype)
                 attention_mask = attention_mask * torch.finfo(hidden_states.dtype).min
                 attention_mask = attention_mask.expand(
