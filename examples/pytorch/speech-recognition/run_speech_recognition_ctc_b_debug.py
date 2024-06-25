@@ -1,0 +1,120 @@
+import os
+
+os.environ["HF_HOME"] = "/projects/bhuang/.cache/huggingface"
+# os.environ["OMP_NUM_THREADS"] = "1"
+# os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# os.environ["BITSANDBYTES_NOWELCOME"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+
+# from run_speech_recognition_ctc_b import main
+from run_speech_recognition_ctc_b_w2vb import main
+
+# model_name_or_path = "LeBenchmark/wav2vec2-FR-7K-large"
+model_name_or_path = "facebook/w2v-bert-2.0"
+
+# train_file = "/projects/bhuang/corpus/speech/nemo_manifests/mozilla-foundation/common_voice_13_0/fr/train/train_mozilla-foundation_common_voice_13_0_manifest_normalized_phoneme.json"
+# validation_file = "/projects/bhuang/corpus/speech/nemo_manifests/mozilla-foundation/common_voice_13_0/fr/validation/validation_mozilla-foundation_common_voice_13_0_manifest_normalized_phoneme.json"
+train_file = "/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-21-normalized/train_asr_normalized_cleaned_goodchars.json"
+validation_file = "/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-21-normalized/test_asr_mcv13_manifest_normalized.json"
+
+output_dir = "/home/bhuang/transformers/examples/pytorch/speech-recognition/outputs/tmp"
+
+main(
+    [
+        "--model_name_or_path",
+        model_name_or_path,
+        "--train_file",
+        train_file,
+        "--validation_file",
+        validation_file,
+        "--audio_column_name",
+        "audio_filepath",
+        "--text_column_name",
+        "text",
+        # "phoneme",
+        "--max_duration_in_seconds",
+        "30",
+        "--min_duration_in_seconds",
+        "1",
+        "--max_train_samples",
+        "100000",
+        "--max_eval_samples",
+        "1000",
+        "--apply_audio_augmentation",
+        "false",
+        # "--background_noise_dir",
+        # $noisedir,
+        # "--audio_augmentation_prob",
+        # "0.2",
+        "--remove_unused_columns",
+        "false",
+        "--preprocessing_num_workers",
+        "16",
+        # "--dataloader_num_workers",
+        # "4",
+        "--output_dir",
+        output_dir,
+        "--overwrite_output_dir",
+        "--num_train_epochs",
+        "10",
+        "--per_device_train_batch_size",
+        "16",
+        "--per_device_eval_batch_size",
+        "16",
+        "--gradient_accumulation_steps",
+        "1",
+        "--learning_rate",
+        "1e-4",
+        "--warmup_ratio",
+        "0.05",
+        "--lr_scheduler_type",
+        "cosine",
+        "--adam_beta2",
+        "0.95",
+        "--weight_decay",
+        "0.01",
+        "--fp16",
+        "--gradient_checkpointing",
+        "--ctc_zero_infinity",
+        # "--freeze_feature_encoder",
+        "--layerdrop",
+        "0",
+        "--feat_proj_dropout",
+        "0",
+        "--attention_dropout",
+        "0.05",
+        "--activation_dropout",
+        "0",
+        "--hidden_dropout",
+        "0.05",
+        "--final_dropout",
+        "0.05",
+        # "--mask_time_prob",
+        # "0.05",
+        # "--mask_time_length",
+        # "10",
+        # "--mask_feature_prob",
+        # "0.05",
+        # "--mask_feature_length",
+        # "10",
+        "--logging_steps",
+        "1",
+        "--evaluation_strategy",
+        "steps",
+        "--eval_steps",
+        "1000",
+        "--save_strategy",
+        "steps",
+        "--save_steps",
+        "1000",
+        "--save_total_limit",
+        "3",
+        "--metric_for_best_model",
+        "wer",
+        "--greater_is_better",
+        "false",
+        "--load_best_model_at_end",
+        "--do_train",
+        "--do_eval",
+    ]
+)
