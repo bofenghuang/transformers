@@ -2,6 +2,8 @@
 # coding=utf-8
 # Copyright 2023  Bofeng Huang
 
+"""Verify if entries in manifest exist."""
+
 import json
 import os
 import re

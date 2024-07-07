@@ -2,6 +2,8 @@
 # coding=utf-8
 # Copyright 2023  Bofeng Huang
 
+"""Convert text into phonemes."""
+
 import json
 
 import fire
