@@ -48,7 +48,7 @@ infer_opt_string="${infer_opt[*]}"
 decode_suffix=_greedy
 # decode_suffix=_beam5
 
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_file "/projects/corpus/voice/zaion/renault/2023-11-24/BO_max30s.json" \
     --id_column_name "id" \
