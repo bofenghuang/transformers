@@ -391,12 +391,6 @@ def main(
     model.generation_config.forced_decoder_ids = None
     model.config.forced_decoder_ids = None
 
-    eval_pred_ids = []
-    eval_preds = []
-    # eval_labels = []
-    eval_ids = []
-    start_time = time.perf_counter()
-
     eval_dataloader = DataLoader(
         speech_dataset,
         batch_size=per_device_eval_batch_size,
@@ -412,6 +406,13 @@ def main(
 
     # Prepare everything with accelerate
     model, eval_dataloader = accelerator.prepare(model, eval_dataloader)
+
+    start_time = time.perf_counter()
+
+    eval_pred_ids = []
+    eval_preds = []
+    # eval_labels = []
+    eval_ids = []
 
     total_steps = int(len(speech_dataset) / per_device_eval_batch_size / accelerator.num_processes)
     batches = tqdm(eval_dataloader, total=total_steps, desc="Inferring...", disable=not accelerator.is_local_main_process)

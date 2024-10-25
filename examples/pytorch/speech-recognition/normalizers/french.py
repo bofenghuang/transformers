@@ -10,11 +10,13 @@ Adapted from: https://github.com/openai/whisper/blob/main/whisper/normalizers/ba
 
 import re
 import unicodedata
+from typing import Dict, List
+from functools import lru_cache
 
 try:
     from num2words import num2words
 except ImportError:
-    raise ImportError("Please install text_to_num by `pip install num2words`")
+    raise ImportError("Please install num2words by `pip install num2words`")
 
 try:
     from text_to_num import alpha2digit
@@ -23,7 +25,7 @@ except ImportError:
 
 
 # non-ASCII letters that are not separated by "NFKD" normalization
-ADDITIONAL_DIACRITICS = {
+ADDITIONAL_DIACRITICS: Dict[str, str] = {
     "œ": "oe",
     "Œ": "OE",
     "ø": "o",
@@ -43,7 +45,8 @@ ADDITIONAL_DIACRITICS = {
 }
 
 
-def remove_symbols_and_diacritics(s: str, keep=""):
+@lru_cache(maxsize=1024)
+def remove_symbols_and_diacritics(s: str, keep: str = "") -> str:
     """
     Replace any other markers, symbols, and punctuations with a space,
     and drop any diacritics (category 'Mn' and some manual mappings)
@@ -52,64 +55,52 @@ def remove_symbols_and_diacritics(s: str, keep=""):
     """
     # fmt: off
     return "".join(
-        c
-        if c in keep
-        else ADDITIONAL_DIACRITICS[c]
+        c if c in keep
+        else ADDITIONAL_DIACRITICS.get(c, "")
         if c in ADDITIONAL_DIACRITICS
-        else ""
-        if unicodedata.category(c) == "Mn"
-        else " "
-        if unicodedata.category(c)[0] in "MSP"
+        else "" if unicodedata.category(c) == "Mn"
+        else " " if unicodedata.category(c)[0] in "MSP"
         else c
         for c in unicodedata.normalize("NFKD", s)
     )
     # fmt: on
 
 
-# adapted to optionally keep selected symbols
-def remove_symbols(s: str, keep=""):
+@lru_cache(maxsize=1024)
+def remove_symbols(s: str, keep: str = "") -> str:
     """
-    Replace any other markers, symbols, punctuations with a space, keeping diacritics
+    Replace any other markers, symbols, punctuations with a space, keeping diacritics.
+
+    # bh: adapted to optionally keep selected symbols
     """
     # fmt: off
     return "".join(
-        c
-        if c in keep
-        else " "
-        if unicodedata.category(c)[0] in "MSP"
+        c if c in keep
+        else " " if unicodedata.category(c)[0] in "MSP"
         else c
         for c in unicodedata.normalize("NFKC", s)
     )
     # fmt: on
 
 
-def roman_to_int(s: str):
-    roman_numerals = {
-        "I": 1,
-        "V": 5,
-        "X": 10,
-        # 'L': 50,
-        # 'C': 100,
-        # 'D': 500,
-        # 'M': 1000
-    }
+ROMAN_NUMERALS: Dict[str, int] = {"I": 1, "V": 5, "X": 10}
+# ROMAN_NUMERALS: Dict[str, int] = {"I": 1, "V": 5, "X": 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
 
+
+def roman_to_int(s: str):
     result = 0
     prev_value = 0
 
     for char in reversed(s):
-        value = roman_numerals[char]
-        if value < prev_value:
-            result -= value
-        else:
-            result += value
+        value = ROMAN_NUMERALS[char]
+        result += value if value >= prev_value else -value
         prev_value = value
 
     return result
 
 
 # todo: L'heure, L
-def detect_and_convert_roman(input_str):
+def detect_and_convert_roman(input_str: str) -> str:
     # roman_pattern = r'\b[IVXLCDM]+\b'
     roman_pattern = r"\b[IVX]+\b"
     matches = re.findall(roman_pattern, input_str)
@@ -153,7 +144,7 @@ class FrenchNumber2TextNormalizer:
             # r"(?<=\d)\s(?=000)": "",  # 1 000 -> 1000
         }
 
-    def preprocess(self, s: str):
+    def preprocess(self, s: str) -> str:
         for pattern, replacement in self.replacers.items():
             s = re.sub(pattern, replacement, s)
 
@@ -186,7 +177,7 @@ class FrenchNumber2TextNormalizer:
 
 
 class FrenchText2NumberNormalizer:
-    def __init__(self, language="fr", ordinal_threshold=0):
+    def __init__(self, language: str = "fr", ordinal_threshold: int = 0):
         self.language = language
         # todo: default 0 or 3
         self.ordinal_threshold = ordinal_threshold
@@ -202,7 +193,7 @@ class FrenchText2NumberNormalizer:
         ]
         self.pattern_hot_fix_a = re.compile(r"(?<!\b{})(\s+et\s+une?\b)".format(r")(?<!\b".join(self.numbers_before_et)))
 
-    def __call__(self, s: str):
+    def __call__(self, s: str) -> str:
 
         # hot fix for "et un" -> "1"
         # may introduce some unconverted number words
@@ -247,8 +238,9 @@ class FrenchTextNormalizer:
 
         self.replacers = {
             # standarize symbols
-            r"’|´|′|ʼ|‘|ʻ|`": "'",  # replace special quote
-            r"−|‐": "-",  # replace special dash
+            r"[´′’ʼ‘ʻ`]": "'",  # standardize quotes and apostrophes
+            r"[−‐–—]": "-",  # standardize hyphens and dashes
+            r"(?:…|\. \. \.)": "...",
             # standarize characters (for french)
             r"æ": "ae",
             r"œ": "oe",
@@ -256,11 +248,11 @@ class FrenchTextNormalizer:
             # r"€": " euro ",
             # r"\$": " dollar ",
             # r"&": " et ",
-            # abbreviations
-            r"\bm\.(?=\s|$)": "monsieur",
-            r"\bM\.(?=\s|$)": "Monsieur",
-            r"\bmme(?=\s|$)": "madame",
-            r"\bmlle(?=\s|$)": "mademoiselle",
+            # standarize abbreviations
+            # r"\bm\.(?=\s|$)": "monsieur",
+            # r"\bM\.(?=\s|$)": "Monsieur",
+            # r"\bmme(?=\s|$)": "madame",
+            # r"\bmlle(?=\s|$)": "mademoiselle",
         }
 
         # todo
@@ -297,20 +289,24 @@ class FrenchTextNormalizer:
     def __call__(
         self,
         s: str,
-        do_lowercase=True,
-        do_ignore_words=False,
-        symbols_to_keep="'-",
-        do_num2text=True,
-        do_text2num=False,
-    ):
+        do_lowercase: bool = True,
+        do_ignore_words: bool = False,
+        symbols_to_keep: str = "'-",
+        do_num2text: bool = True,
+        do_text2num: bool = False,
+        do_remove_bracketed_words: bool = False,
+    ) -> str:
         assert not (do_num2text and do_text2num)
 
         if do_lowercase:
             s = s.lower()
 
-        # s = re.sub(r"[<\[][^>\]]*[>\]]", "", s)  # remove words between brackets
-        # s = re.sub(r"\(([^)]+?)\)", "", s)  # remove words between parenthesis
-        # s = re.sub(r"^\s*#\d{3}\s", "", s)  # remove beginning http response code
+        if do_remove_bracketed_words:
+            # e.g., [musique], [rire], [applaudissements]
+            s = re.sub(r"\[[^\]]*\]", "", s)  # remove content between square brackets
+            # s = re.sub(r"<[^>]*>", "", s)  # remove content between angle brackets
+            # s = re.sub(r"\([^)]*\)", "", s)  # remove content between parentheses
+            # s = re.sub(r"^\s*#\d{3}\s", "", s)  # remove beginning http response code
 
         if self.ignore_patterns is not None and do_ignore_words:
             s = re.sub(self.ignore_patterns, "", s)
@@ -330,13 +326,10 @@ class FrenchTextNormalizer:
         s = self.text2num_normalizer(s) if do_text2num else s  # convert words to numbers
         # s = self.standardize_spellings(s)
 
-        # todo: I forgot why I did it again here
-        # s = re.sub(rf"[^{self.kept_chars}\' ]", "", s)  # remove unnecessary alphabet characters
         s = re.sub(rf"[^{self.kept_chars}{re.escape(symbols_to_keep)}\s]", " ", s)  # remove unnecessary alphabet characters
 
         # standardize apostrophe
-        s = re.sub(r"\s+'", "'", s)  # remove space before an apostrophe
-        s = re.sub(r"'\s+", "'", s)  # remove space after an apostrophe
+        s = re.sub(r"\s*'\s*", "'", s)  # remove space before/after apostrophe
         # s = re.sub(rf"([{self.kept_chars}])\s+'", r"\1'", s)  # standardize when there's a space before an apostrophe
         # s = re.sub(rf"([{self.kept_chars}])'([{self.kept_chars}])", r"\1' \2", s)  # add an espace after an apostrophe
         # s = re.sub(rf"(?<!aujourd)(?<=[{self.kept_chars}])'(?=[{self.kept_chars}])", "' ", s)  # add an espace after an apostrophe (except aujourd'hui)
@@ -353,11 +346,13 @@ class FrenchTextNormalizer:
 
         # standardize other symbols
         # standardize "?!:"
-        if special_symbols := "".join(re.findall(r"[?!:]", s)):
+        special_symbols = "".join(set(s) & set("?!:;"))
+        if special_symbols:
             s = re.sub(rf"([{self.kept_chars}])([{re.escape(special_symbols)}])", r"\1 \2", s)  # add space before symbols
             s = re.sub(rf"([{re.escape(special_symbols)}])([{self.kept_chars}])", r"\1 \2", s)  # add space between symbols and chars
-        # standardize ",."
-        if special_symbols := "".join(re.findall(r"[,.]", s)):
+        # standardize comma/period
+        special_symbols = "".join(set(s) & set(",."))
+        if special_symbols:
             s = re.sub(rf"\s+([{re.escape(special_symbols)}])", r"\1", s)  # remove space before symbols
             s = re.sub(rf"([{re.escape(special_symbols)}])([{self.alphabet_chars}])", r"\1 \2", s)  # add space between symbols and non-number chars
 

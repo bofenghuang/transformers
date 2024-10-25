@@ -9,7 +9,9 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
+import ctc_segmentation as cs
 import fire
+import numpy as np
 import torch
 import torch.nn.functional as F
 from datasets import Audio, load_dataset
@@ -19,6 +21,7 @@ from tqdm import tqdm
 import transformers
 from transformers import AutoModelForCTC, Wav2Vec2Processor, Wav2Vec2ProcessorWithLM
 from utils.audio_utils import get_waveform
+from data_utils import write_dataset_to_json
 
 SAMPLE_RATE = 16_000
 
@@ -27,21 +30,6 @@ def normalize_text(s):
     s = re.sub(r"\s*'\s*", "'", s)  # standardize when there's a space before/after an apostrophe
     s = re.sub(r"\s+", " ", s).strip()  # replace any successive whitespace characters with a space
     return s
-
-
-def write_dataset_to_json(
-    dataset: Dataset,
-    output_file_path: str,
-    mode: str = "w",
-    encoding: str = "utf-8",
-    default: Any = str,
-    ensure_ascii: bool = False,
-) -> None:
-    """Write dataset to a JSON file, line by line."""
-    with open(output_file_path, mode, encoding=encoding) as fo:
-        for sample in tqdm(dataset, desc="Writing to json", total=dataset.num_rows, unit=" samples"):
-            sample = {k: v for k, v in sample.items() if isinstance(v, (str, int, float))}
-            fo.write(f"{json.dumps(sample, default=default, ensure_ascii=ensure_ascii)}\n")
 
 
 class SpeechDataset(Dataset):
@@ -174,6 +162,7 @@ def main(
     batch_size: int = 8,
     pad_to_multiple_of: int = 8,
     dataloader_num_workers: int = 1,
+    score_min_mean_over_l: Optional[int] = None,
     num_processing_workers: int = 16,
     max_samples: Optional[int] = None,
 ):
@@ -190,7 +179,7 @@ def main(
     # decoder = processor.decoder
 
     feature_extractor = processor.feature_extractor
-    # tokenizer = processor.tokenizer
+    tokenizer = processor.tokenizer
     model_sampling_rate = feature_extractor.sampling_rate
 
     # config = AutoConfig.from_pretrained(model_name_or_path)
@@ -268,6 +257,7 @@ def main(
     start_time = time.perf_counter()
 
     hypotheses = []
+    probabilities = []
     losses = []
 
     for batch in tqdm(dataloader, desc="Inferring..."):
@@ -281,33 +271,92 @@ def main(
             logits = outputs.logits
             loss = outputs.loss
 
+            # get output lengths after conv layers
+            output_lengths = model._get_feat_extract_output_lengths(batch["attention_mask"].sum(-1)).to(torch.long)
+
+            probs = F.softmax(logits, dim=-1)
+            probs = probs.cpu().numpy()
+            # Use attention mask to ignore padding
+            probs = [prob[:output_length] for prob, output_length in zip(probs, output_lengths)]
+
             if compute_ctc_loss:
-                # averaged by the target lengths
+                # average loss by the target lengths
                 loss = (loss / batch["labels"].ne(-100).sum(-1)).tolist()
 
         if greedy:
             predicted_ids = torch.argmax(logits, dim=-1)
+            # Use attention mask to ignore padding
+            predicted_ids = [ids[:output_length] for ids, output_length in zip(predicted_ids, output_lengths)]
             predicted_sentences = processor.batch_decode(predicted_ids)
         else:
-            predicted_sentences = processor.batch_decode(logits.cpu().numpy()).text
+            logits = logits.cpu().numpy()
+            # Use attention mask to ignore padding
+            logits = [log[:output_length] for log, output_length in zip(logits, output_lengths)]
+            predicted_sentences = processor.batch_decode(logits).text
 
         hypotheses.extend(predicted_sentences)
+        probabilities.extend(probs)
         if compute_ctc_loss:
             losses.extend(loss)
 
     print(f'Inference time: {time.strftime("%Hh%Mm%Ss", time.gmtime(time.perf_counter() - start_time))}')
 
-    # todo: postprocess
-    # hypotheses = list(map(normalize_text, hypotheses))
-    # df_data[text_column_name] = df_data[id_column_name].map({i: d for i, d in zip(indexes, hypotheses)})
+    # Tokenize transcripts
+    vocab = tokenizer.get_vocab()
+    # unk_id = vocab["<unk>"]
+    unk_id = vocab["[UNK]"]
+    char_list = list(vocab.keys())
+
+    sample = dataset[0]
+    index_duration = int(sample["duration"] * SAMPLE_RATE) / probabilities[0].shape[0] / SAMPLE_RATE
+
+    config = cs.CtcSegmentationParameters(char_list=char_list)
+    # config.char_list = char_list
+    # config.min_window_size = window_size
+    config.index_duration = index_duration
+    # config.index_duration = round(index_duration, 4)
+    # config.index_duration = audio.shape[0] / probs.size()[0] / samplerate
+    # Character probabilities over each L frames are accumulated to calculate the confidence score
+    # A lower L makes the score more sensitive to error in the transcription, but also errors in the ASR model
+    if score_min_mean_over_l is not None:
+        config.score_min_mean_over_L = int(score_min_mean_over_l)
+    print(f"ctc_segmentation config: {config}")
+
+    def process_function(example, idx):
+        # split by word
+        transcripts = example[text_column_name].split()
+        probs = probabilities[idx]
+
+        tokens = []
+        for transcript in transcripts:
+            assert len(transcript) > 0
+            tok_ids = tokenizer(transcript, return_tensors="np")["input_ids"]
+            # tok_ids = np.array(tok_ids, dtype=np.int)
+            tok_ids = np.array(tok_ids, dtype=np.int64)
+            tokens.append(tok_ids[tok_ids != unk_id])
+
+        try:
+            # convert ground truth text or tokens into a matrix
+            # ground_truth_mat, utt_begin_indices = cs.prepare_text(config, transcripts)
+            ground_truth_mat, utt_begin_indices = cs.prepare_token_list(config, tokens)
+            # computes char-wise alignments from the CTC log posterior probabilites
+            timings, char_probs, state_list = cs.ctc_segmentation(config, probs, ground_truth_mat)
+            # converts char-wise alignments to utterance-wise alignments
+            segments = cs.determine_utterance_segments(config, utt_begin_indices, char_probs, timings, transcripts)
+
+            example["predicted_words"] = [{"text": t, "start": p[0], "end": p[1], "conf": p[2]} for t, p in zip(transcripts, segments)]
+        except:
+            example["predicted_words"] = []
+
+        return example
+
+    dataset = dataset.map(process_function, with_indices=True, num_proc=num_processing_workers, load_from_cache_file=False)
 
     dataset = dataset.add_column("predicted_text", hypotheses)
     if compute_ctc_loss:
         dataset = dataset.add_column("predicted_ctc_loss", losses)
 
-    os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
     write_dataset_to_json(dataset, output_file_path)
-    print(f"Predicted results have been saved into {output_file_path}")
 
 
 if __name__ == "__main__":

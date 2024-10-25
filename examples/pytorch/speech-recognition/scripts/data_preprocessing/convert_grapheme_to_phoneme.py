@@ -12,6 +12,8 @@ from phonemizer.backend import EspeakBackend
 from phonemizer.separator import Separator
 from tqdm import tqdm
 
+from data_utils import write_dataset_to_json, print_dataset_info
+
 
 def main(
     input_file_path: str,
@@ -21,9 +23,7 @@ def main(
     num_workers: int = 1,
 ):
     dataset = load_dataset("json", data_files=input_file_path, split="train")
-    print(dataset)
-    # print(max(dataset["duration"]))
-    # quit()
+    print_dataset_info(dataset)
 
     # debug
     # dataset = dataset.select(range(10))
@@ -40,11 +40,10 @@ def main(
         lambda x: {phoneme_column_name: phonemize_text(x[text_column_name])},
         num_proc=num_workers,
     )
-    print(dataset)
+    print_dataset_info(dataset)
 
-    with open(output_file_path, "w") as fo:
-        for sample in tqdm(dataset, desc="Writing to json", total=dataset.num_rows, unit=" samples"):
-            fo.write(f"{json.dumps(sample, ensure_ascii=False)}\n")
+    # export
+    write_dataset_to_json(dataset, output_file_path=output_file_path, mode="w")
 
 
 if __name__ == "__main__":

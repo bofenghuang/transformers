@@ -1,0 +1,67 @@
+#!/usr/bin/env python
+# coding=utf-8
+# Copyright 2024  Bofeng Huang
+
+
+from collections import Counter
+
+import fire
+from datasets import load_dataset
+from normalizers.french import FrenchTextNormalizer
+
+
+from data_utils import write_dataset_to_json, print_dataset_info
+
+
+def main(
+    input_file_path: str,
+    output_file_path: str,
+    text_column_name: str = "text",
+    normalized_text_column_name: str = "normalized_text",
+    num_workers: int = 64,
+):
+    dataset = load_dataset("json", data_files=input_file_path, split="train")
+    print_dataset_info(dataset)
+
+    normalizer = FrenchTextNormalizer()
+
+    def _normalize(s):
+        s = normalizer(
+            s,
+            do_lowercase=True,
+            do_ignore_words=False,
+            symbols_to_keep="'",  # w/o "-"
+            do_num2text=True,
+            do_remove_bracketed_words=True
+        )
+        return s
+
+    # remove_columns = set(dataset.column_names) - {"text", "audio_filepath", "duration", "text_norm"}
+
+    dataset = dataset.map(
+        lambda x: {normalized_text_column_name: _normalize(x[text_column_name])},
+        num_proc=num_workers,
+        # remove_columns=remove_columns,
+        desc="normalizing text...",
+    )
+
+    dataset = dataset.filter(lambda x: x[normalized_text_column_name], num_proc=num_workers, desc="filtering...")
+    print_dataset_info(dataset)
+
+    # char_counts = Counter(" ".join(dataset[text_column_name]))
+    # print(char_counts)
+    # quit()
+
+    # allowed_chars = "a-zàâäçéèêëîïñôöùûüÿ" + "'- "
+    # allowed_chars = "a-zàâäçéèêëîïôöùûü" + "'\- "
+    # dataset = dataset.filter(
+    #     lambda x: not bool(re.search(rf"[^{allowed_chars}]", x)), input_columns=text_column_name, num_proc=num_workers
+    # )
+    # print(dataset.num_rows)
+
+    # export
+    write_dataset_to_json(dataset, output_file_path=output_file_path, mode="w")
+
+
+if __name__ == "__main__":
+    fire.Fire(main)

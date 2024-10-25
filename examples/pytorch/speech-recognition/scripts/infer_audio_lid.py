@@ -20,7 +20,7 @@ import time
 from torch.utils.data import DataLoader, Dataset
 from typing import Optional, List, Dict, Any, Union
 import math
-from speechbrain.pretrained import EncoderClassifier
+from speechbrain.inference import EncoderClassifier
 
 # import soundfile as sf
 from dataclasses import dataclass
@@ -172,7 +172,7 @@ def main(
     audio_column_name: str = "audio_filepath",
 ):
     # load model
-    model = EncoderClassifier.from_hparams(source=model_name_or_path, run_opts={"device": device})
+    model = EncoderClassifier.from_hparams(source=model_name_or_path, run_opts={"device": device}, savedir="tmp")
     label_index = model.hparams.label_encoder.encode_label(label_name)
 
     # load data
