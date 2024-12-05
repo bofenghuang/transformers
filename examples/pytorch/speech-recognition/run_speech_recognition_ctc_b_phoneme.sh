@@ -108,7 +108,7 @@ torchrun \
     --mask_feature_prob "0.05" \
     --mask_feature_length "10" \
     --logging_steps "10" \
-    --evaluation_strategy "steps" \
+    --eval_strategy "steps" \
     --eval_steps "1000" \
     --save_strategy "steps" \
     --save_steps "1000" \

@@ -38,8 +38,8 @@ export WANDB_PROJECT="asr-w2v2ctc"
 
 # cuda
 # https://github.com/microsoft/DeepSpeed/issues/662
-export CUDA_VISIBLE_DEVICES="0,1,2,3"
-# export CUDA_VISIBLE_DEVICES="4,5,6,7"
+# export CUDA_VISIBLE_DEVICES="0,1,2,3"
+export CUDA_VISIBLE_DEVICES="4,5,6,7"
 
 # Set your number of GPUs here
 num_gpus=4
@@ -51,7 +51,7 @@ num_gpus=4
 # CMD="python"
 # CMD="torchrun --master_port=29001 --nproc_per_node=$num_gpus"
 # CMD="deepspeed --master_port 29001 --include localhost:1,2"
-CMD="accelerate launch --multi_gpu --num_processes=$num_gpus"
+CMD="accelerate launch --multi_gpu --num_processes=$num_gpus --main_process_port 29002"
 
 # models
 # model_name_or_path="facebook/wav2vec2-large-xlsr-53"
@@ -67,7 +67,7 @@ validation_file="/projects/bhuang/corpus/speech/nemo_manifests/mozilla-foundatio
 noisedir="/projects/bhuang/corpus/speech/musan_wo_speech"
 
 tmp_model_id="$(echo "${model_name_or_path##*/}" | sed -e "s/[ |=/-]/_/g")"
-run_name="${tmp_model_id}_ft_ep80_bs256_lr1e4_specaugxtime02x10x01x64"
+run_name="${tmp_model_id}_ft_ep80_bs256_lr1e4_specaugxtime03x10x01x64"
 output_dir="./outputs/w2v2_ctc_mcv/$run_name"
 
 # multiple gpus - layerdropout vs gradient_checkpointing
@@ -89,8 +89,6 @@ output_dir="./outputs/w2v2_ctc_mcv/$run_name"
 
     # --max_train_samples "8192" \
     # --max_eval_samples "1024" \
-    # --max_train_samples "50000" \
-    # --attn_implementation "flash_attention_2" \
 
 $CMD run_speech_recognition_ctc_b.py \
     --model_name_or_path $model_name_or_path \
@@ -104,13 +102,14 @@ $CMD run_speech_recognition_ctc_b.py \
     --apply_audio_augmentation false \
     --background_noise_dir $noisedir \
     --audio_augmentation_prob "0.2" \
-    --mask_time_prob "0.2" \
+    --mask_time_prob "0.3" \
     --mask_time_length "10" \
     --mask_feature_prob "0.1" \
     --mask_feature_length "64" \
     --preprocessing_num_workers "16" \
     --dataloader_num_workers "8" \
     --output_dir $output_dir \
+    --overwrite_output_dir \
     --run_name $run_name \
     --num_train_epochs "80" \
     --per_device_train_batch_size "64" \

@@ -74,7 +74,7 @@ torchrun --nproc_per_node 4 run_speech_recognition_ctc_b.py \
 	--warmup_steps="800" \
 	--weight_decay="0.01" \
     --logging_steps="25" \
-    --evaluation_strategy="steps" \
+    --eval_strategy="steps" \
     --eval_steps="500" \
     --save_strategy="steps" \
     --save_steps="500" \

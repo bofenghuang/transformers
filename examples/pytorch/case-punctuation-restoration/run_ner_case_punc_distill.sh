@@ -91,7 +91,7 @@ accelerate launch \
 	--save_strategy "steps" \
 	--save_steps "500" \
 	--save_total_limit "2" \
-	--evaluation_strategy "steps" \
+	--eval_strategy "steps" \
 	--eval_steps "500" \
 	--load_best_model_at_end \
 	--report_to "tensorboard" "wandb" \

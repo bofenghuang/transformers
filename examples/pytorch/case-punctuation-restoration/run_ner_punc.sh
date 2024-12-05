@@ -75,7 +75,7 @@ export CUDA_VISIBLE_DEVICES=1
 # 	--warmup_ratio "0.1" \
 # 	--weight_decay "0.01" \
 # 	--logging_steps "100" \
-# 	--evaluation_strategy "steps" \
+# 	--eval_strategy "steps" \
 # 	--eval_steps "500" \
 # 	--save_steps "500" \
 # 	--save_total_limit "3" \
@@ -110,7 +110,7 @@ export CUDA_VISIBLE_DEVICES=1
 # 	--warmup_ratio "0.1" \
 # 	--weight_decay "0.01" \
 # 	--logging_steps "100" \
-# 	--evaluation_strategy "steps" \
+# 	--eval_strategy "steps" \
 # 	--eval_steps "500" \
 # 	--save_steps "500" \
 # 	--save_total_limit "3" \
@@ -146,7 +146,7 @@ python3 run_ner_punc.py \
 	--warmup_ratio "0.1" \
 	--weight_decay "0.01" \
 	--logging_steps "100" \
-	--evaluation_strategy "steps" \
+	--eval_strategy "steps" \
 	--eval_steps "500" \
 	--save_steps "500" \
 	--save_total_limit "3" \

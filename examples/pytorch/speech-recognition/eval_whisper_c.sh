@@ -61,7 +61,7 @@ decode_suffix=_greedy
 # todo: lm, suppress_tokens
 # grep "%WER" ~/transformers/examples/pytorch/speech-recognition/outputs/hf_whisper/openai-whisper_large*/results_*_greedy/normalized_wer_summary/wer_summary.txt
 
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_name "mozilla-foundation/common_voice_13_0" \
     --dataset_config_name "fr" \
@@ -74,7 +74,7 @@ python scripts/compute_wer.py \
     --target_column_name "sentence" \
     --output_dir ${outdir}_mcv13${decode_suffix} 2>&1 | tee ${outdir}_mcv13${decode_suffix}/log.txt
 
-# $CMD infer_whisper_c.py \
+# $CMD infer_whisper_b.py \
 #     $infer_opt_string \
 #     --dataset_file "/projects/bhuang/corpus/speech/nemo_manifests/final/2023-11-13/test_asr_mcv13_manifest_normalized_pnc.json" \
 #     --id_column_name "id" \
@@ -90,7 +90,7 @@ python scripts/compute_wer.py \
 # exit 0;
 
 # mls
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_name "facebook/multilingual_librispeech" \
     --dataset_config_name "french" \
@@ -103,7 +103,7 @@ python scripts/compute_wer.py \
     --output_dir ${outdir}_mls${decode_suffix} 2>&1 | tee ${outdir}_mls${decode_suffix}/log.txt
 
 # voxpopuli
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_name "facebook/voxpopuli" \
     --dataset_config_name "fr" \
@@ -116,7 +116,7 @@ python scripts/compute_wer.py \
     --output_dir ${outdir}_voxpopuli${decode_suffix} 2>&1 | tee ${outdir}_voxpopuli${decode_suffix}/log.txt
 
 # fleurs
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_name "google/fleurs" \
     --dataset_config_name "fr_fr" \
@@ -131,7 +131,7 @@ python scripts/compute_wer.py \
     --output_dir ${outdir}_fleurs${decode_suffix} 2>&1 | tee ${outdir}_fleurs${decode_suffix}/log.txt
 
 # african_accented_french
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_name "gigant/african_accented_french" \
     --dataset_config_name "fr" \
@@ -144,7 +144,7 @@ python scripts/compute_wer.py \
     --output_dir ${outdir}_african_accented_french${decode_suffix} 2>&1 | tee ${outdir}_african_accented_french${decode_suffix}/log.txt
 
 # zaion hmhm
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_file "/home/ywang/NeMo/examples/asr_zaion/190h_manifest/test_manifest_segment_16k_190h.json" \
     --audio_column_name "audio_filepath" \
@@ -157,7 +157,7 @@ python scripts/compute_wer.py \
     --output_dir ${outdir}_zaion_test_hmhm${decode_suffix} 2>&1 | tee ${outdir}_zaion_test_hmhm${decode_suffix}/log.txt
 
 # zaion carglass
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_file "/home/ywang/NeMo/examples/asr_zaion/benchmark_robustess/carglass_5h/16k_segment.json" \
     --audio_column_name "audio_filepath" \
@@ -170,7 +170,7 @@ python scripts/compute_wer.py \
     --output_dir ${outdir}_zaion_test_carglass${decode_suffix} 2>&1 | tee ${outdir}_zaion_test_carglass${decode_suffix}/log.txt
 
 # zaion dekuple
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_file "/home/ywang/NeMo/examples/asr_zaion/benchmark_robustess/dekuple_5h/16k_segment.json" \
     --audio_column_name "audio_filepath" \
@@ -183,7 +183,7 @@ python scripts/compute_wer.py \
     --output_dir ${outdir}_zaion_test_dekuple${decode_suffix} 2>&1 | tee ${outdir}_zaion_test_dekuple${decode_suffix}/log.txt
 
 # zaion lbpa
-$CMD infer_whisper_c.py \
+$CMD infer_whisper_b.py \
     $infer_opt_string \
     --dataset_file "/home/ywang/NeMo/examples/asr_zaion/benchmark_robustess/lbpa_2.35h/16k_segment.json" \
     --audio_column_name "audio_filepath" \

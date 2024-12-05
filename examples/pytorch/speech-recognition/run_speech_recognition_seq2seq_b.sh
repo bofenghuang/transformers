@@ -110,7 +110,7 @@ torchrun \
     --use_cache false \
     --freeze_feature_encoder false \
     --logging_steps "10" \
-    --evaluation_strategy "steps" \
+    --eval_strategy "steps" \
     --eval_steps "500" \
     --save_strategy "steps" \
     --save_steps "500" \

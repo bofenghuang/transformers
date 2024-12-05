@@ -53,7 +53,7 @@ outdir=outputs/knkarthick_dialogsum-fr-nllb_200_distilled_600M
 #     --warmup_ratio "0.05" \
 #     --weight_decay "0.01" \
 #     --logging_steps "25" \
-#     --evaluation_strategy "steps" \
+#     --eval_strategy "steps" \
 #     --eval_steps "100" \
 #     --save_strategy "steps" \
 #     --save_steps "100" \
@@ -85,7 +85,7 @@ python run_summarization_b.py \
     --warmup_ratio "0.05" \
     --weight_decay "0.01" \
     --logging_steps "25" \
-    --evaluation_strategy "steps" \
+    --eval_strategy "steps" \
     --eval_steps "100" \
     --save_strategy "steps" \
     --save_steps "100" \
@@ -118,7 +118,7 @@ python run_summarization_b.py \
 #     --warmup_ratio "0.05" \
 #     --weight_decay "0.01" \
 #     --logging_steps "25" \
-#     --evaluation_strategy "steps" \
+#     --eval_strategy "steps" \
 #     --eval_steps "100" \
 #     --save_strategy "steps" \
 #     --save_steps "100" \
@@ -151,7 +151,7 @@ python run_summarization_b.py \
 #     --warmup_ratio "0.05" \
 #     --weight_decay "0.01" \
 #     --logging_steps "25" \
-#     --evaluation_strategy "steps" \
+#     --eval_strategy "steps" \
 #     --eval_steps "100" \
 #     --save_strategy "steps" \
 #     --save_steps "100" \
@@ -185,7 +185,7 @@ python run_summarization_b.py \
 #     --warmup_ratio "0.05" \
 #     --weight_decay "0.01" \
 #     --logging_steps "25" \
-#     --evaluation_strategy "steps" \
+#     --eval_strategy "steps" \
 #     --eval_steps "100" \
 #     --save_strategy "steps" \
 #     --save_steps "100" \
@@ -220,7 +220,7 @@ python run_summarization_b.py \
 #     --warmup_ratio "0.05" \
 #     --weight_decay "0.01" \
 #     --logging_steps "25" \
-#     --evaluation_strategy "steps" \
+#     --eval_strategy "steps" \
 #     --eval_steps "2000" \
 #     --save_strategy "steps" \
 #     --save_steps "2000" \

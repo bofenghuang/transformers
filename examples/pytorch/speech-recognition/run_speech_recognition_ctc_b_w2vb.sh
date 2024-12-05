@@ -117,7 +117,7 @@ torchrun \
     --conformer_conv_dropout "0.1" \
     --final_dropout "0.1" \
     --logging_steps "10" \
-    --evaluation_strategy "steps" \
+    --eval_strategy "steps" \
     --eval_steps "100" \
     --save_strategy "steps" \
     --save_steps "100" \

@@ -28,7 +28,7 @@ def write_dataset_to_json(
 
 
 # fmt: off
-def print_dataset_info(ds: Any, duration_column_name:str="duration"):
+def print_dataset_info(ds: Any, duration_column_name: str = "duration"):
     print()
     print(f"#rows: {ds.num_rows}")
     print(f"Columns: {ds.column_names}")

@@ -234,6 +234,17 @@ Trained on a subset of ~2000 hours of French data and evaluated on validation se
 - linear better than cosine if trained for enough longer (sometime cosine better means we can't trained for longer??), both better than wsd
 - lr 1e-4 worse than 3e-4 even trained for enough long
 
+*Tuning hyperparams4*
+
+Trained on full ~10,000 hours of data
+
+- Tried cosine/wsd scheduler and schedule-free optimizer, not better than linear
+- Tried different weighting of ce and kl loss, ce saturated in the late stage, kl still decreased
+- Go for more agressive data augmentation (time022x30x2xfeat022x14x2, time03x10x2xfeat022x14x2)
+- Combined v3's encoder (for speculative decoding) and v3-turbo's decoder (1st and last), used as starting checkpoint, got better final peformance than distil_large_v3, but grad_norm increase at the end while eval wer continue to decrease, strange behaviour
+- Pushed to 160 epochs in the end, no big difference with 100 epochs
+- Tried averaging last 5/10 checkpoints, but didn't see a significant difference
+
 
 *todo*
 

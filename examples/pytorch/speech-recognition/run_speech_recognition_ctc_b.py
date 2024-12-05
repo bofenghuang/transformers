@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-""" Fine-tuning a 🤗 Transformers CTC model for automatic speech recognition"""
+"""Fine-tuning a 🤗 Transformers CTC model for automatic speech recognition"""
 
 import functools
 import json
@@ -52,10 +52,11 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 from utils.augment_audio import SpeechAugmentator
+from utils.audio_utils import get_waveform_from_audio_or_stored_zip
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.38.0.dev0")
+# check_min_version("4.45.0.dev0")
 
 require_version("datasets>=1.18.0", "To fix: pip install -r examples/pytorch/speech-recognition/requirements.txt")
 
@@ -105,7 +106,7 @@ class ModelArguments:
         metadata={"help": "The dropout probability for the final projection layer."},
     )
     mask_time_prob: float = field(
-        default=0.05,
+        default=0.0,
         metadata={
             "help": (
                 "Probability of each feature vector along the time axis to be chosen as the start of the vector "
@@ -148,6 +149,17 @@ class ModelArguments:
         metadata={
             "help": "Whether a convolutional attention network should be stacked on top of the Wav2Vec2Bert Encoder. Can be very"
             "useful to downsample the output length."
+        },
+    )
+    attn_implementation: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Which attention implementation to use in the encoder and decoder attention layers. Can be one of:\n"
+                "1. `eager` or `None`: default Transformers attention implementation.\n"
+                "2. `sdpa`: Flash Attention through PyTorch SDPA. Requires `torch>=2.1`. Recommended for hardware where Flash Attention 2 is not supported, e.g. Turing GPUs, (T4, RTX 2080).\n"
+                "3. `flash_attention_2`: Flash Attention 2 through the Flash Attention package https://github.com/Dao-AILab/flash-attention. **Always** recommended on supported hardware (Ampere, Ada, or Hopper GPUs, e.g., A100, RTX 3090, RTX 4090, H100)."
+            )
         },
     )
 
@@ -258,19 +270,13 @@ class DataTrainingArguments:
             )
         },
     )
-    use_auth_token: bool = field(
-        default=None,
-        metadata={
-            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token` instead."
-        },
-    )
     trust_remote_code: bool = field(
         default=False,
         metadata={
             "help": (
-                "Whether or not to allow for custom models defined on the Hub in their own modeling files. This option"
-                "should only be set to `True` for repositories you trust and in which you have read the code, as it will "
-                "execute code present on the Hub on your local machine."
+                "Whether to trust the execution of code from datasets/models defined on the Hub."
+                " This option should only be set to `True` for repositories you trust and in which you have read the"
+                " code, as it will execute code present on the Hub on your local machine."
             )
         },
     )
@@ -341,17 +347,18 @@ class DataCollatorCTCWithPadding:
     padding: Union[bool, str] = "longest"
     pad_to_multiple_of: Optional[int] = None
     pad_to_multiple_of_labels: Optional[int] = None
+    feature_extractor_input_name: Optional[str] = "input_values"
     phoneme_language: Optional[str] = None
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        model_input_name = self.processor.model_input_names[0]
 
         for feature in features:
             # read waveform
-            waveform, sample_rate = sf.read(
-                feature[self.audio_column_name], start=0, frames=-1, dtype="float32", always_2d=True
-            )
-            waveform = waveform[:, 0]
+            # waveform, sample_rate = sf.read(
+            #     feature[self.audio_column_name], start=0, frames=-1, dtype="float32", always_2d=True
+            # )
+            # waveform = waveform[:, 0]
+            waveform, sample_rate = get_waveform_from_audio_or_stored_zip(feature[self.audio_column_name])
             feature["input_length"] = waveform.shape[0]
 
             if self.augmentator is not None:
@@ -360,8 +367,8 @@ class DataCollatorCTCWithPadding:
                 waveform = self.augmentator(waveform, sample_rate=sample_rate)
 
             inputs = self.processor.feature_extractor(waveform, sampling_rate=sample_rate)
-            feature[model_input_name] = inputs.get(model_input_name)[0]
-            # feature["input_length"] = len(feature[model_input_name])
+            feature[self.feature_extractor_input_name] = inputs.get(self.feature_extractor_input_name)[0]
+            # feature["input_length"] = len(feature[self.feature_extractor_input_name])
 
             # encode targets
             additional_kwargs = {}
@@ -372,7 +379,9 @@ class DataCollatorCTCWithPadding:
 
         # split inputs and labels since they have to be of different lengths and need
         # different padding methods
-        input_features = [{model_input_name: feature[model_input_name]} for feature in features]
+        input_features = [
+            {self.feature_extractor_input_name: feature[self.feature_extractor_input_name]} for feature in features
+        ]
         label_features = [{"input_ids": feature["labels"]} for feature in features]
 
         batch = self.processor.pad(
@@ -442,7 +451,6 @@ def create_vocabulary_from_data(
 
 
 def main():
-# def main(args):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
@@ -454,16 +462,6 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-        # model_args, data_args, training_args = parser.parse_args_into_dataclasses(args)
-
-    if data_args.use_auth_token is not None:
-        warnings.warn(
-            "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token` instead.",
-            FutureWarning,
-        )
-        if data_args.token is not None:
-            raise ValueError("`token` and `use_auth_token` are both specified. Please set only the argument `token`.")
-        data_args.token = data_args.use_auth_token
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
@@ -518,6 +516,7 @@ def main():
                 data_args.dataset_config_name,
                 split=data_args.train_split_name,
                 token=data_args.token,
+                trust_remote_code=data_args.trust_remote_code,
             )
         else:
             raise ValueError("You have not specified a dataset name nor a custom train file")
@@ -549,6 +548,7 @@ def main():
                 data_args.dataset_config_name,
                 split=data_args.eval_split_name,
                 token=data_args.token,
+                trust_remote_code=data_args.trust_remote_code,
             )
         else:
             raise ValueError("You have not specified a dataset name nor a custom validation file")
@@ -694,6 +694,7 @@ def main():
         config=config,
         token=data_args.token,
         trust_remote_code=data_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
     )
 
     # bh: try to load a pretrained ASR model when #vocab is different
@@ -794,10 +795,14 @@ def main():
         logger.info(f"Data preprocessing finished. Files cached at {vectorized_datasets.cache_files}")
         return
 
-    def compute_metrics(pred):
-        pred_logits = pred.predictions
-        pred_ids = np.argmax(pred_logits, axis=-1)
+    # For languages like Chinese with large vocabulary size, we need to discard logits
+    # and only keep the argmax, otherwise we run out of memory during evaluation.
+    def preprocess_logits_for_metrics(logits, labels):
+        pred_ids = torch.argmax(logits, dim=-1)
+        return pred_ids, labels
 
+    def compute_metrics(pred):
+        pred_ids = pred.predictions[0]
         pred.label_ids[pred.label_ids == -100] = tokenizer.pad_token_id
 
         pred_str = tokenizer.batch_decode(pred_ids)
@@ -840,6 +845,7 @@ def main():
         audio_column_name=audio_column_name,
         pad_to_multiple_of=8,
         pad_to_multiple_of_labels=8,
+        feature_extractor_input_name=feature_extractor_input_name,
         phoneme_language=phoneme_language,
     )
 
@@ -890,6 +896,7 @@ def main():
         train_dataset=vectorized_datasets["train"] if training_args.do_train else None,
         eval_dataset=vectorized_datasets["eval"] if training_args.do_eval else None,
         tokenizer=processor,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         # optimizers=(optimizer, None),
     )
 
@@ -949,8 +956,8 @@ def main():
         ),
         # "dataset": f"{data_args.dataset_name.upper()} - {config_name.upper()}",
     }
-    if "common_voice" in data_args.dataset_name:
-        kwargs["language"] = config_name
+    # if "common_voice" in data_args.dataset_name:
+    #     kwargs["language"] = config_name
 
     if training_args.push_to_hub:
         trainer.push_to_hub(**kwargs)

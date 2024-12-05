@@ -66,7 +66,7 @@ deepspeed --include localhost:4,5 --master_port 29002 run_speech_recognition_seq
     --warmup_steps="500" \
     --weight_decay "1e-2" \
     --logging_steps="25" \
-    --evaluation_strategy="steps" \
+    --eval_strategy="steps" \
     --eval_steps="500" \
     --save_strategy="steps" \
     --save_steps="500" \

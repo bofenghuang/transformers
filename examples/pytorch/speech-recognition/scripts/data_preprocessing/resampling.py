@@ -36,14 +36,16 @@ def main(
             always_2d=False,
         )
 
-        sf.write(processed_audio_file, waveform, SAMPLE_RATE, "FLOAT")
+        sf.write(processed_audio_file, waveform, samplerate=SAMPLE_RATE, format="wav")
+
+        example["audio_filepath"] = processed_audio_file
 
         return example
 
     dataset = dataset.map(process_function, num_proc=num_workers)
 
     # export
-    output_file = input_file.rsplit(".", 1)[0] + "_16K.jsonl"
+    output_file = input_file.rsplit(".", 1)[0] + "_16k.jsonl"
     write_dataset_to_json(dataset, output_file_path=output_file, mode="w")
 
 
